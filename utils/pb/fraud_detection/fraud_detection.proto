@@ -1,5 +1,7 @@
 syntax = "proto3";
+package suggestions;
 
+<<<<<<< Updated upstream
 package fraud_detection;
 
 service FraudDetectionService {
@@ -14,3 +16,47 @@ message FraudRequest {
 message FraudResponse {
     bool is_fraud = 1;
 }
+=======
+service SuggestionsService {
+    rpc InitOrder (InitOrderRequest) returns (InitOrderResponse);
+    rpc GetSuggestions (SuggestionsRequest) returns (SuggestionsResponse);
+    rpc ClearOrder (ClearOrderRequest) returns (ClearOrderResponse);
+}
+
+message InitOrderRequest {
+    string order_id = 1;
+    string user_name = 2;
+    int32 item_count = 3;
+    repeated int32 vector_clock = 4;
+}
+
+message InitOrderResponse {
+    bool success = 1;
+    repeated int32 vector_clock = 2;
+}
+
+message SuggestionsRequest {
+    string order_id = 1;
+    repeated int32 vector_clock = 2;
+}
+
+message SuggestionsResponse {
+    repeated Book books = 1;
+    repeated int32 vector_clock = 2;
+}
+
+message Book {
+    string bookId = 1;
+    string title = 2;
+    string author = 3;
+}
+
+message ClearOrderRequest {
+    string order_id = 1;
+    repeated int32 vector_clock = 2;
+}
+
+message ClearOrderResponse {
+    bool success = 1;
+}
+>>>>>>> Stashed changes
