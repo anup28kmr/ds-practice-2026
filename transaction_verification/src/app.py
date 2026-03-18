@@ -1,88 +1,118 @@
 import sys
 import os
-
-# This set of lines are needed to import the gRPC stubs.
-# The path of the stubs is relative to the current file, or absolute inside the container.
-# Change these lines only if strictly needed.
-FILE = __file__ if '__file__' in globals() else os.getenv("PYTHONFILE", "")
-transaction_verification_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/transaction_verification'))
-sys.path.insert(0, transaction_verification_grpc_path)
-import transaction_verification_pb2 as transaction_verification
-import transaction_verification_pb2_grpc as transaction_verification_grpc
-
 import grpc
 from concurrent import futures
 
-# Create a class to define the server functions, derived from
-# transaction_verification_pb2_grpc.TransactionVerificationServiceServicer
-class TransactionVerificationService(transaction_verification_grpc.TransactionVerificationServiceServicer):
-    # Create an RPC function to verify transaction
-    def VerifyTransaction(self, request, context):
-        print(f"Verifying transaction for card: {request.card_number}")
+FILE = __file__ if '__file__' in globals() else os.getenv("PYTHONFILE", "")
+tv_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/transaction_verification'))
+sys.path.insert(0, tv_path)
+import transaction_verification_pb2 as tv
+import transaction_verification_pb2_grpc as tv_grpc
 
-        # Check 1: items list must not be empty
-        if len(request.items) == 0:
-            print("Verification failed: No items in order")
-            return transaction_verification.TransactionResponse(
-                is_valid=False,
-                reason="Order must contain at least one item"
-            )
+# In-memory store: { order_id: { data + vector_clock } }
+order_store = {}
 
-        # Check 2: user data must be filled in
-        if not request.user_name or not request.user_contact:
-            print("Verification failed: Missing user data")
-            return transaction_verification.TransactionResponse(
-                is_valid=False,
-                reason="User name and contact are required"
-            )
+# Service index in vector clock: TV=0, FD=1, SG=2
+SERVICE_INDEX = 0
 
-        # Check 3: card number must be 16 digits
-        card_number = request.card_number.replace(" ", "")
-        if not card_number.isdigit() or len(card_number) != 16:
-            print("Verification failed: Invalid card number")
-            return transaction_verification.TransactionResponse(
-                is_valid=False,
-                reason="Invalid card number format, must be 16 digits"
-            )
+def update_clock(local_vc, received_vc):
+    """Merge clocks: take MAX of each slot, then increment own slot."""
+    merged = [max(local_vc[i], received_vc[i]) for i in range(3)]
+    merged[SERVICE_INDEX] += 1
+    return merged
 
-        # Check 4: CVV must be 3 digits
-        if not request.card_cvv.isdigit() or len(request.card_cvv) != 3:
-            print("Verification failed: Invalid CVV")
-            return transaction_verification.TransactionResponse(
-                is_valid=False,
-                reason="Invalid CVV, must be 3 digits"
-            )
+class TransactionVerificationService(tv_grpc.TransactionVerificationServiceServicer):
 
-        # Check 5: expiration date format MM/YY
-        expiration = request.card_expiration
-        if len(expiration) != 5 or expiration[2] != '/' or \
-           not expiration[:2].isdigit() or not expiration[3:].isdigit():
-            print("Verification failed: Invalid expiration date")
-            return transaction_verification.TransactionResponse(
-                is_valid=False,
-                reason="Invalid expiration date, use MM/YY format"
-            )
+    def InitOrder(self, request, context):
+        """Cache order data and initialize vector clock."""
+        vc = list(request.vector_clock) if request.vector_clock else [0, 0, 0]
+        vc = update_clock(vc, vc)
 
-        print("Transaction verified successfully")
-        return transaction_verification.TransactionResponse(
-            is_valid=True,
-            reason="Transaction is valid"
-        )
+        order_store[request.order_id] = {
+            "user_name": request.user_name,
+            "user_contact": request.user_contact,
+            "card_number": request.card_number,
+            "expiration_date": request.expiration_date,
+            "cvv": request.cvv,
+            "item_count": request.item_count,
+            "vector_clock": vc
+        }
+
+        print(f"[TV] InitOrder {request.order_id} | VC={vc}")
+        return tv.InitOrderResponse(success=True, vector_clock=vc)
+
+    def VerifyItems(self, request, context):
+        """Event a: Verify items list is not empty."""
+        order = order_store.get(request.order_id)
+        if not order:
+            return tv.VerifyResponse(is_valid=False, reason="Order not found", vector_clock=[0,0,0])
+
+        vc = update_clock(order["vector_clock"], list(request.vector_clock))
+        order["vector_clock"] = vc
+        print(f"[TV] Event a - VerifyItems {request.order_id} | VC={vc}")
+
+        if order["item_count"] <= 0:
+            return tv.VerifyResponse(is_valid=False, reason="Items list is empty", vector_clock=vc)
+
+        return tv.VerifyResponse(is_valid=True, reason="Items OK", vector_clock=vc)
+
+    def VerifyUserData(self, request, context):
+        """Event b: Verify user data is filled in."""
+        order = order_store.get(request.order_id)
+        if not order:
+            return tv.VerifyResponse(is_valid=False, reason="Order not found", vector_clock=[0,0,0])
+
+        vc = update_clock(order["vector_clock"], list(request.vector_clock))
+        order["vector_clock"] = vc
+        print(f"[TV] Event b - VerifyUserData {request.order_id} | VC={vc}")
+
+        if not order["user_name"] or not order["user_contact"]:
+            return tv.VerifyResponse(is_valid=False, reason="Missing user data", vector_clock=vc)
+
+        return tv.VerifyResponse(is_valid=True, reason="User data OK", vector_clock=vc)
+
+    def VerifyCardFormat(self, request, context):
+        """Event c: Verify card format."""
+        order = order_store.get(request.order_id)
+        if not order:
+            return tv.VerifyResponse(is_valid=False, reason="Order not found", vector_clock=[0,0,0])
+
+        vc = update_clock(order["vector_clock"], list(request.vector_clock))
+        order["vector_clock"] = vc
+        print(f"[TV] Event c - VerifyCardFormat {request.order_id} | VC={vc}")
+
+        card = order["card_number"].replace(" ", "")
+        if not card.isdigit() or len(card) != 16:
+            return tv.VerifyResponse(is_valid=False, reason="Invalid card number", vector_clock=vc)
+        if not order["cvv"].isdigit() or len(order["cvv"]) != 3:
+            return tv.VerifyResponse(is_valid=False, reason="Invalid CVV", vector_clock=vc)
+
+        return tv.VerifyResponse(is_valid=True, reason="Card format OK", vector_clock=vc)
+
+    def ClearOrder(self, request, context):
+        """Clear cached order data."""
+        vc_final = list(request.vector_clock)
+        order = order_store.get(request.order_id)
+        if order:
+            local_vc = order["vector_clock"]
+            # Check local VC <= VCf
+            if all(local_vc[i] <= vc_final[i] for i in range(3)):
+                del order_store[request.order_id]
+                print(f"[TV] ClearOrder {request.order_id} | VC check OK")
+                return tv.ClearOrderResponse(success=True)
+            else:
+                print(f"[TV] ClearOrder {request.order_id} | VC check FAILED")
+                return tv.ClearOrderResponse(success=False)
+        return tv.ClearOrderResponse(success=True)
 
 def serve():
-    # Create a gRPC server
     server = grpc.server(futures.ThreadPoolExecutor())
-    # Add TransactionVerificationService
-    transaction_verification_grpc.add_TransactionVerificationServiceServicer_to_server(
+    tv_grpc.add_TransactionVerificationServiceServicer_to_server(
         TransactionVerificationService(), server
     )
-    # Listen on port 50052
-    port = "50052"
-    server.add_insecure_port("[::]:" + port)
-    # Start the server
+    server.add_insecure_port("[::]:" + "50052")
     server.start()
     print("Transaction verification server started. Listening on port 50052.")
-    # Keep thread alive
     server.wait_for_termination()
 
 if __name__ == '__main__':
