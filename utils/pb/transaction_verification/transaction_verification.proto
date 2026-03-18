@@ -1,26 +1,46 @@
 syntax = "proto3";
-
 package transaction_verification;
 
 service TransactionVerificationService {
-    rpc VerifyTransaction (TransactionRequest) returns (TransactionResponse);
+    rpc InitOrder (InitOrderRequest) returns (InitOrderResponse);
+    rpc VerifyItems (VerifyRequest) returns (VerifyResponse);
+    rpc VerifyUserData (VerifyRequest) returns (VerifyResponse);
+    rpc VerifyCardFormat (VerifyRequest) returns (VerifyResponse);
+    rpc ClearOrder (ClearOrderRequest) returns (ClearOrderResponse);
 }
 
-message TransactionRequest {
-    string card_number = 1;
-    string card_expiration = 2;
-    string card_cvv = 3;
-    repeated Item items = 4;
-    string user_name = 5;
-    string user_contact = 6;
+message InitOrderRequest {
+    string order_id = 1;
+    string user_name = 2;
+    string user_contact = 3;
+    string card_number = 4;
+    string expiration_date = 5;
+    string cvv = 6;
+    int32 item_count = 7;
+    repeated int32 vector_clock = 8;
 }
 
-message Item {
-    string name = 1;
-    int32 quantity = 2;
+message InitOrderResponse {
+    bool success = 1;
+    repeated int32 vector_clock = 2;
 }
 
-message TransactionResponse {
+message VerifyRequest {
+    string order_id = 1;
+    repeated int32 vector_clock = 2;
+}
+
+message VerifyResponse {
     bool is_valid = 1;
     string reason = 2;
+    repeated int32 vector_clock = 3;
+}
+
+message ClearOrderRequest {
+    string order_id = 1;
+    repeated int32 vector_clock = 2;
+}
+
+message ClearOrderResponse {
+    bool success = 1;
 }
