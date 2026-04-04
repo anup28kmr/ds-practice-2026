@@ -29,6 +29,12 @@ sys.path.insert(0, suggestions_grpc_path)
 import suggestions_pb2 as suggestions
 import suggestions_pb2_grpc as suggestions_grpc
 
+# Import order queue stubs
+order_queue_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/order_queue'))
+sys.path.insert(0, order_queue_grpc_path)
+import order_queue_pb2 as order_queue
+import order_queue_pb2_grpc as order_queue_grpc
+
 # Helper function to get transaction verification stub
 def get_tv_stub():
     channel = grpc.insecure_channel('transaction_verification:50052')
@@ -43,6 +49,11 @@ def get_fd_stub():
 def get_sg_stub():
     channel = grpc.insecure_channel('suggestions:50053')
     return suggestions_grpc.SuggestionsServiceStub(channel)
+
+# Helper function to get order queue stub
+def get_queue_stub():
+    channel = grpc.insecure_channel('order_queue:50054')
+    return order_queue_grpc.OrderQueueServiceStub(channel)
 
 # Helper function to merge two vector clocks by taking MAX of each slot
 def merge_clocks(vc1, vc2):
@@ -127,6 +138,24 @@ def broadcast_clear(order_id, vc_final):
         executor.submit(clear_fd)
         executor.submit(clear_sg)
 
+# Enqueue valid order in the order queue
+def enqueue_order(order_id, user_name, user_contact, items):
+    try:
+        stub = get_queue_stub()
+        response = stub.Enqueue(order_queue.EnqueueRequest(
+            order=order_queue.Order(
+                order_id=order_id,
+                user_name=user_name,
+                user_contact=user_contact,
+                items=items
+            )
+        ))
+        print(f"[ORCH] Order enqueued | order_id={order_id} | success={response.success}")
+        return response.success
+    except Exception as e:
+        print(f"[ORCH] Enqueue failed: {e}")
+        return False
+
 # Import Flask.
 # Flask is a web framework for Python.
 # It allows you to build a web application quickly.
@@ -205,3 +234,127 @@ def checkout():
             )
             future_b = executor.submit(
                 lambda: get_tv_stub().VerifyUserData(
+                    transaction_verification.VerifyRequest(order_id=order_id, vector_clock=tv_vc)
+                )
+            )
+            resp_a = future_a.result()
+            resp_b = future_b.result()
+
+        print(f"[ORCH] Event a | is_valid={resp_a.is_valid} | VC={list(resp_a.vector_clock)}")
+        print(f"[ORCH] Event b | is_valid={resp_b.is_valid} | VC={list(resp_b.vector_clock)}")
+
+        # If either event fails propagate failure immediately back to user
+        if not resp_a.is_valid:
+            result["reason"] = resp_a.reason
+            raise Exception(resp_a.reason)
+        if not resp_b.is_valid:
+            result["reason"] = resp_b.reason
+            raise Exception(resp_b.reason)
+
+        vc_after_a = list(resp_a.vector_clock)
+        vc_after_b = list(resp_b.vector_clock)
+
+        # Phase 3: Run event (c) and event (d) in parallel
+        # (c) TV verifies card format - runs after (a)
+        # (d) FD checks user data for fraud - runs after (b)
+        print(f"[ORCH] Phase 3 - Events c and d in parallel")
+
+        with futures.ThreadPoolExecutor(max_workers=2) as executor:
+            future_c = executor.submit(
+                lambda: get_tv_stub().VerifyCardFormat(
+                    transaction_verification.VerifyRequest(order_id=order_id, vector_clock=vc_after_a)
+                )
+            )
+            future_d = executor.submit(
+                lambda: get_fd_stub().CheckUserDataForFraud(
+                    fraud_detection.FraudCheckRequest(order_id=order_id, vector_clock=vc_after_b)
+                )
+            )
+            resp_c = future_c.result()
+            resp_d = future_d.result()
+
+        print(f"[ORCH] Event c | is_valid={resp_c.is_valid} | VC={list(resp_c.vector_clock)}")
+        print(f"[ORCH] Event d | is_fraud={resp_d.is_fraud} | VC={list(resp_d.vector_clock)}")
+
+        # If either event fails propagate failure immediately back to user
+        if not resp_c.is_valid:
+            result["reason"] = resp_c.reason
+            raise Exception(resp_c.reason)
+        if resp_d.is_fraud:
+            result["reason"] = resp_d.reason
+            raise Exception(resp_d.reason)
+
+        # Merge clocks from c and d since event e depends on both
+        vc_after_cd = merge_clocks(list(resp_c.vector_clock), list(resp_d.vector_clock))
+
+        # Phase 4: Event (e) - runs after both (c) and (d) complete
+        # FD checks credit card for fraud
+        print(f"[ORCH] Phase 4 - Event e | VC={vc_after_cd}")
+
+        resp_e = get_fd_stub().CheckCreditCardForFraud(fraud_detection.FraudCheckRequest(
+            order_id=order_id,
+            vector_clock=vc_after_cd
+        ))
+
+        print(f"[ORCH] Event e | is_fraud={resp_e.is_fraud} | VC={list(resp_e.vector_clock)}")
+
+        # If fraud detected propagate failure immediately back to user
+        if resp_e.is_fraud:
+            result["reason"] = resp_e.reason
+            raise Exception(resp_e.reason)
+
+        vc_after_e = list(resp_e.vector_clock)
+
+        # Phase 5: Event (f) - runs after (e) completes
+        # SG generates book suggestions
+        print(f"[ORCH] Phase 5 - Event f | VC={vc_after_e}")
+
+        resp_f = get_sg_stub().GetSuggestions(suggestions.SuggestionsRequest(
+            order_id=order_id,
+            vector_clock=vc_after_e
+        ))
+
+        print(f"[ORCH] Event f | books={len(resp_f.books)} | VC={list(resp_f.vector_clock)}")
+
+        # Set final vector clock and collect suggested books
+        vc_final = list(resp_f.vector_clock)
+        result["success"] = True
+        result["books"] = [
+            {"bookId": b.bookId, "title": b.title, "author": b.author}
+            for b in resp_f.books
+        ]
+
+        # Enqueue the valid order for execution by order executors
+        item_names = [item.get("name", "") for item in items]
+        enqueue_order(order_id, user_name, user_contact, item_names)
+
+    except Exception as e:
+        # Order failed - set final vc from last known clocks
+        print(f"[ORCH] Order failed: {e}")
+        vc_final = merge_clocks(merge_clocks(tv_vc, fd_vc), sg_vc)
+
+    finally:
+        # Broadcast clear order to all services with final vector clock
+        print(f"[ORCH] Broadcasting ClearOrder | VCf={vc_final}")
+        broadcast_clear(order_id, vc_final)
+
+    # Consolidate results and return response to user
+    if result["success"]:
+        return {
+            'orderId': order_id,
+            'status': 'Order Approved',
+            'suggestedBooks': result["books"]
+        }
+    else:
+        return {
+            'orderId': order_id,
+            'status': 'Order Rejected',
+            'suggestedBooks': [],
+            'reason': result["reason"]
+        }
+
+if __name__ == '__main__':
+    # Run the app in debug mode to enable hot reloading.
+    # This is useful for development.
+    # The default port is 5000.
+    app.run(host='0.0.0.0')
