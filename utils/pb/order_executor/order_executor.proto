@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package order_executor;
+
+service OrderExecutorService {
+    rpc StartElection (ElectionRequest) returns (ElectionResponse);
+    rpc AnnounceLeader (LeaderRequest) returns (LeaderResponse);
+    rpc GetLeader (GetLeaderRequest) returns (GetLeaderResponse);
+}
+
+message ElectionRequest {
+    string candidate_id = 1;
+}
+
+message ElectionResponse {
+    bool acknowledged = 1;
+}
+
+message LeaderRequest {
+    string leader_id = 1;
+}
+
+message LeaderResponse {
+    bool acknowledged = 1;
+}
+
+message GetLeaderRequest {}
+
+message GetLeaderResponse {
+    string leader_id = 1;
+}
