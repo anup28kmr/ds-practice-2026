@@ -71,6 +71,8 @@ def build_order_kwargs(
     }
 
 
+# --- Service init calls (unchanged) ---
+
 def init_fraud_service(order_id, order_kwargs):
     with grpc.insecure_channel("fraud_detection:50051") as channel:
         stub = fraud_detection_grpc.FraudDetectionServiceStub(channel)
@@ -98,6 +100,39 @@ def init_suggestions_service(order_id, order_kwargs):
         return stub.InitOrder(request, timeout=5.0)
 
 
+# --- Root event calls: only a and b ---
+
+def tv_validate_items(order_id):
+    with grpc.insecure_channel("transaction_verification:50052") as channel:
+        stub = transaction_verification_grpc.TransactionVerificationServiceStub(channel)
+        req = transaction_verification.EventRequest(
+            order_id=order_id,
+            vc=transaction_verification.VectorClock(values=[0, 0, 0]),
+        )
+        return stub.ValidateItems(req, timeout=15.0)
+
+
+def tv_validate_user_data(order_id):
+    with grpc.insecure_channel("transaction_verification:50052") as channel:
+        stub = transaction_verification_grpc.TransactionVerificationServiceStub(channel)
+        req = transaction_verification.EventRequest(
+            order_id=order_id,
+            vc=transaction_verification.VectorClock(values=[0, 0, 0]),
+        )
+        return stub.ValidateUserData(req, timeout=15.0)
+
+
+# --- Pipeline result collection ---
+
+def await_pipeline_result(order_id):
+    with grpc.insecure_channel("suggestions:50053") as channel:
+        stub = suggestions_grpc.SuggestionsServiceStub(channel)
+        req = suggestions.PipelineResultRequest(order_id=order_id)
+        return stub.AwaitPipelineResult(req, timeout=30.0)
+
+
+# --- Enqueue and clear (unchanged) ---
+
 def enqueue_order(order_id, order_kwargs):
     with grpc.insecure_channel("order_queue:50054") as channel:
         stub = order_queue_grpc.OrderQueueServiceStub(channel)
@@ -114,76 +149,6 @@ def enqueue_order(order_id, order_kwargs):
             )
         )
         return stub.Enqueue(request, timeout=5.0)
-
-
-def tv_validate_items(order_id, vc):
-    with grpc.insecure_channel("transaction_verification:50052") as channel:
-        stub = transaction_verification_grpc.TransactionVerificationServiceStub(channel)
-        request = transaction_verification.EventRequest(
-            order_id=order_id,
-            vc=transaction_verification.VectorClock(values=vc),
-        )
-        return stub.ValidateItems(request, timeout=5.0)
-
-
-def tv_validate_user_data(order_id, vc):
-    with grpc.insecure_channel("transaction_verification:50052") as channel:
-        stub = transaction_verification_grpc.TransactionVerificationServiceStub(channel)
-        request = transaction_verification.EventRequest(
-            order_id=order_id,
-            vc=transaction_verification.VectorClock(values=vc),
-        )
-        return stub.ValidateUserData(request, timeout=5.0)
-
-
-def tv_validate_card_format(order_id, vc):
-    with grpc.insecure_channel("transaction_verification:50052") as channel:
-        stub = transaction_verification_grpc.TransactionVerificationServiceStub(channel)
-        request = transaction_verification.EventRequest(
-            order_id=order_id,
-            vc=transaction_verification.VectorClock(values=vc),
-        )
-        return stub.ValidateCardFormat(request, timeout=5.0)
-
-
-def fd_check_user_fraud(order_id, vc):
-    with grpc.insecure_channel("fraud_detection:50051") as channel:
-        stub = fraud_detection_grpc.FraudDetectionServiceStub(channel)
-        request = fraud_detection.EventRequest(
-            order_id=order_id,
-            vc=fraud_detection.VectorClock(values=vc),
-        )
-        return stub.CheckUserFraud(request, timeout=5.0)
-
-
-def fd_check_card_fraud(order_id, vc):
-    with grpc.insecure_channel("fraud_detection:50051") as channel:
-        stub = fraud_detection_grpc.FraudDetectionServiceStub(channel)
-        request = fraud_detection.EventRequest(
-            order_id=order_id,
-            vc=fraud_detection.VectorClock(values=vc),
-        )
-        return stub.CheckCardFraud(request, timeout=5.0)
-
-
-def sug_precompute(order_id, vc):
-    with grpc.insecure_channel("suggestions:50053") as channel:
-        stub = suggestions_grpc.SuggestionsServiceStub(channel)
-        request = suggestions.EventRequest(
-            order_id=order_id,
-            vc=suggestions.VectorClock(values=vc),
-        )
-        return stub.PrecomputeSuggestions(request, timeout=5.0)
-
-
-def sug_finalize(order_id, vc):
-    with grpc.insecure_channel("suggestions:50053") as channel:
-        stub = suggestions_grpc.SuggestionsServiceStub(channel)
-        request = suggestions.EventRequest(
-            order_id=order_id,
-            vc=suggestions.VectorClock(values=vc),
-        )
-        return stub.FinalizeSuggestions(request, timeout=5.0)
 
 
 def clear_fraud_service(order_id, final_vc):
@@ -305,7 +270,7 @@ def checkout():
         terms_accepted=terms_accepted,
     )
 
-    # Initialization phase
+    # --- Phase 1: Initialize all backend services ---
     try:
         init_tv = init_transaction_service(order_id, order_kwargs)
         init_fd = init_fraud_service(order_id, order_kwargs)
@@ -337,166 +302,70 @@ def checkout():
 
     print(f"[ORCH] order={order_id} initialization_complete")
 
-    # Event-flow state
-    cancelled = threading.Event()
+    # --- Phase 2: Kick off root events on TV ---
+    # The orchestrator only triggers the two root events (a and b).
+    # TV handles all downstream chaining: c internally, then forwards to FD and SUG.
+    # FD gates event e on both d and c's VC.
+    # SUG gates event g on both f and e's VC.
+    # The orchestrator does NOT manage any dependency graph.
+    root_results = {}
+    root_errors = {}
 
-    done = {
-        "a": threading.Event(),  # ValidateItems
-        "b": threading.Event(),  # ValidateUserData
-        "c": threading.Event(),  # ValidateCardFormat
-        "d": threading.Event(),  # CheckUserFraud
-        "e": threading.Event(),  # CheckCardFraud
-        "f": threading.Event(),  # PrecomputeSuggestions
-        "g": threading.Event(),  # FinalizeSuggestions
-    }
-
-    state = {
-        "event_vcs": {},
-        "final_vc": [0, 0, 0],
-        "books": [],
-        "failure_kind": None,  # "event_failure" or "internal_error"
-        "failed_step": None,
-        "failure_message": None,
-    }
-    lock = threading.Lock()
-
-    def store_event_result(step, response):
-        vc = list(response.vc.values)
-        with lock:
-            state["event_vcs"][step] = vc
-            state["final_vc"] = merge_vcs(state["final_vc"], vc)
-
-    def merged_from(*steps):
-        with lock:
-            vcs = [state["event_vcs"][step] for step in steps if step in state["event_vcs"]]
-        if not vcs:
-            return [0, 0, 0]
-        return merge_vcs(*vcs)
-
-    def record_event_failure(step, response):
-        with lock:
-            if state["failure_kind"] is None:
-                state["failure_kind"] = "event_failure"
-                state["failed_step"] = step
-                state["failure_message"] = response.message
-                state["final_vc"] = merge_vcs(
-                    state["final_vc"], list(response.vc.values)
-                )
-        cancelled.set()
-        print(f"[ORCH] order={order_id} step={step} success=False message={response.message}")
-
-    def record_internal_failure(step, message, fallback_vc):
-        with lock:
-            if state["failure_kind"] is None:
-                state["failure_kind"] = "internal_error"
-                state["failed_step"] = step
-                state["failure_message"] = message
-                state["final_vc"] = merge_vcs(state["final_vc"], fallback_vc)
-        cancelled.set()
-        print(f"[ORCH] order={order_id} step={step} internal_error={message}")
-
-    def run_event(step, prereqs, input_steps, rpc_func):
-        for prereq in prereqs:
-            done[prereq].wait()
-
-        if cancelled.is_set():
-            done[step].set()
-            return
-
-        request_vc = merged_from(*input_steps)
-
+    def run_root(name, rpc_fn):
         try:
-            response = rpc_func(order_id, request_vc)
-            store_event_result(step, response)
-
-            if not response.success:
-                record_event_failure(step, response)
+            root_results[name] = rpc_fn(order_id)
         except Exception as e:
-            record_internal_failure(step, str(e), request_vc)
-        finally:
-            done[step].set()
+            root_errors[name] = str(e)
 
-    def run_finalize():
-        for prereq in ["e", "f"]:
-            done[prereq].wait()
+    print(f"[ORCH] order={order_id} starting_root_events")
 
-        if cancelled.is_set():
-            done["g"].set()
-            return
-
-        request_vc = merged_from("e", "f")
-
-        try:
-            response = sug_finalize(order_id, request_vc)
-            store_event_result("g", response)
-
-            if response.success:
-                books = []
-                for book in response.books:
-                    books.append(
-                        {
-                            "bookId": book.bookId,
-                            "title": book.title,
-                            "author": book.author,
-                        }
-                    )
-                with lock:
-                    state["books"] = books
-            else:
-                record_event_failure("g", response)
-        except Exception as e:
-            record_internal_failure("g", str(e), request_vc)
-        finally:
-            done["g"].set()
-
-    # Example partial order:
-    # a || b
-    # c after a
-    # d after b
-    # e after c and d
-    # f after a
-    # g after e and f
-    workers = [
-        threading.Thread(target=run_event, args=("a", [], [], tv_validate_items)),
-        threading.Thread(target=run_event, args=("b", [], [], tv_validate_user_data)),
-        threading.Thread(target=run_event, args=("c", ["a"], ["a"], tv_validate_card_format)),
-        threading.Thread(target=run_event, args=("d", ["b"], ["b"], fd_check_user_fraud)),
-        threading.Thread(target=run_event, args=("e", ["c", "d"], ["c", "d"], fd_check_card_fraud)),
-        threading.Thread(target=run_event, args=("f", ["a"], ["a"], sug_precompute)),
-        threading.Thread(target=run_finalize),
+    threads = [
+        threading.Thread(target=run_root, args=("a", tv_validate_items)),
+        threading.Thread(target=run_root, args=("b", tv_validate_user_data)),
     ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
 
-    print(f"[ORCH] order={order_id} starting_event_flow")
-    for worker in workers:
-        worker.start()
+    if root_errors:
+        print(f"[ORCH] order={order_id} root_event_errors={root_errors}")
 
-    for worker in workers:
-        worker.join()
-
-    print(f"[ORCH] order={order_id} all_worker_threads_finished")
-
-    with lock:
-        final_vc = merge_vcs(state["final_vc"], *state["event_vcs"].values())
-        state["final_vc"] = final_vc
-
-    if state["failure_kind"] == "internal_error":
-        broadcast_clear(order_id, final_vc)
+    # --- Phase 3: Wait for the full pipeline to complete ---
+    # SUG.AwaitPipelineResult blocks until event g finishes (or a failure propagates).
+    try:
+        pipeline_result = await_pipeline_result(order_id)
+    except Exception as e:
+        print(f"[ORCH] order={order_id} pipeline_await_error={e}")
+        broadcast_clear(order_id, [0, 0, 0])
         return {
             "error": {
                 "code": "INTERNAL_ERROR",
-                "message": state["failure_message"],
+                "message": "Failed to await pipeline result.",
             }
         }, 500
 
-    if state["failure_kind"] == "event_failure":
+    final_vc = list(pipeline_result.vc.values)
+
+    # Also merge root event VCs into final_vc for completeness.
+    for name in ("a", "b"):
+        if name in root_results:
+            final_vc = merge_vcs(final_vc, list(root_results[name].vc.values))
+
+    if not pipeline_result.success:
+        print(
+            f"[ORCH] order={order_id} pipeline_rejected "
+            f"message={pipeline_result.message} final_vc={final_vc}"
+        )
         broadcast_clear(order_id, final_vc)
         return {
-            "error": {
-                "code": "ORDER_REJECTED",
-                "message": state["failure_message"],
-            }
-        }, 400
+            "orderId": order_id,
+            "status": "Order Rejected",
+            "suggestedBooks": [],
+            "reason": pipeline_result.message,
+        }, 200
 
+    # --- Phase 4: Enqueue approved order ---
     try:
         enqueue_response = enqueue_order(order_id, order_kwargs)
     except Exception as e:
@@ -521,10 +390,20 @@ def checkout():
     broadcast_clear(order_id, final_vc)
     print(f"[ORCH] order={order_id} final_status=APPROVED final_vc={final_vc}")
 
+    books = []
+    for book in pipeline_result.books:
+        books.append(
+            {
+                "bookId": book.bookId,
+                "title": book.title,
+                "author": book.author,
+            }
+        )
+
     return {
         "orderId": order_id,
         "status": "Order Approved",
-        "suggestedBooks": state["books"],
+        "suggestedBooks": books,
     }, 200
 
 

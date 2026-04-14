@@ -77,6 +77,38 @@ class SuggestionsEventResponse(_message.Message):
     books: _containers.RepeatedCompositeFieldContainer[SuggestedBook]
     def __init__(self, success: bool = ..., message: _Optional[str] = ..., vc: _Optional[_Union[VectorClock, _Mapping]] = ..., books: _Optional[_Iterable[_Union[SuggestedBook, _Mapping]]] = ...) -> None: ...
 
+class VCForward(_message.Message):
+    __slots__ = ("order_id", "source_event", "vc", "success", "message")
+    ORDER_ID_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_EVENT_FIELD_NUMBER: _ClassVar[int]
+    VC_FIELD_NUMBER: _ClassVar[int]
+    SUCCESS_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    order_id: str
+    source_event: str
+    vc: VectorClock
+    success: bool
+    message: str
+    def __init__(self, order_id: _Optional[str] = ..., source_event: _Optional[str] = ..., vc: _Optional[_Union[VectorClock, _Mapping]] = ..., success: bool = ..., message: _Optional[str] = ...) -> None: ...
+
+class PipelineResultRequest(_message.Message):
+    __slots__ = ("order_id",)
+    ORDER_ID_FIELD_NUMBER: _ClassVar[int]
+    order_id: str
+    def __init__(self, order_id: _Optional[str] = ...) -> None: ...
+
+class PipelineResultResponse(_message.Message):
+    __slots__ = ("success", "message", "vc", "books")
+    SUCCESS_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    VC_FIELD_NUMBER: _ClassVar[int]
+    BOOKS_FIELD_NUMBER: _ClassVar[int]
+    success: bool
+    message: str
+    vc: VectorClock
+    books: _containers.RepeatedCompositeFieldContainer[SuggestedBook]
+    def __init__(self, success: bool = ..., message: _Optional[str] = ..., vc: _Optional[_Union[VectorClock, _Mapping]] = ..., books: _Optional[_Iterable[_Union[SuggestedBook, _Mapping]]] = ...) -> None: ...
+
 class ClearOrderRequest(_message.Message):
     __slots__ = ("order_id", "final_vc")
     ORDER_ID_FIELD_NUMBER: _ClassVar[int]

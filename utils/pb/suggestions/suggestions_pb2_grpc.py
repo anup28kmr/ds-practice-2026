@@ -49,6 +49,16 @@ class SuggestionsServiceStub(object):
                 request_serializer=suggestions__pb2.EventRequest.SerializeToString,
                 response_deserializer=suggestions__pb2.SuggestionsEventResponse.FromString,
                 _registered_method=True)
+        self.ForwardVC = channel.unary_unary(
+                '/suggestions.SuggestionsService/ForwardVC',
+                request_serializer=suggestions__pb2.VCForward.SerializeToString,
+                response_deserializer=suggestions__pb2.EventResponse.FromString,
+                _registered_method=True)
+        self.AwaitPipelineResult = channel.unary_unary(
+                '/suggestions.SuggestionsService/AwaitPipelineResult',
+                request_serializer=suggestions__pb2.PipelineResultRequest.SerializeToString,
+                response_deserializer=suggestions__pb2.PipelineResultResponse.FromString,
+                _registered_method=True)
         self.ClearOrder = channel.unary_unary(
                 '/suggestions.SuggestionsService/ClearOrder',
                 request_serializer=suggestions__pb2.ClearOrderRequest.SerializeToString,
@@ -77,6 +87,20 @@ class SuggestionsServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ForwardVC(self, request, context):
+        """Receive a forwarded vector clock from another microservice.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def AwaitPipelineResult(self, request, context):
+        """Block until the full pipeline completes for this order, then return the result.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def ClearOrder(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -100,6 +124,16 @@ def add_SuggestionsServiceServicer_to_server(servicer, server):
                     servicer.FinalizeSuggestions,
                     request_deserializer=suggestions__pb2.EventRequest.FromString,
                     response_serializer=suggestions__pb2.SuggestionsEventResponse.SerializeToString,
+            ),
+            'ForwardVC': grpc.unary_unary_rpc_method_handler(
+                    servicer.ForwardVC,
+                    request_deserializer=suggestions__pb2.VCForward.FromString,
+                    response_serializer=suggestions__pb2.EventResponse.SerializeToString,
+            ),
+            'AwaitPipelineResult': grpc.unary_unary_rpc_method_handler(
+                    servicer.AwaitPipelineResult,
+                    request_deserializer=suggestions__pb2.PipelineResultRequest.FromString,
+                    response_serializer=suggestions__pb2.PipelineResultResponse.SerializeToString,
             ),
             'ClearOrder': grpc.unary_unary_rpc_method_handler(
                     servicer.ClearOrder,
@@ -188,6 +222,60 @@ class SuggestionsService(object):
             '/suggestions.SuggestionsService/FinalizeSuggestions',
             suggestions__pb2.EventRequest.SerializeToString,
             suggestions__pb2.SuggestionsEventResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ForwardVC(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/suggestions.SuggestionsService/ForwardVC',
+            suggestions__pb2.VCForward.SerializeToString,
+            suggestions__pb2.EventResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def AwaitPipelineResult(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/suggestions.SuggestionsService/AwaitPipelineResult',
+            suggestions__pb2.PipelineResultRequest.SerializeToString,
+            suggestions__pb2.PipelineResultResponse.FromString,
             options,
             channel_credentials,
             insecure,

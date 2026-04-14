@@ -49,6 +49,7 @@ docker compose logs --no-color --tail 200 order_queue order_executor_1 order_exe
 
 Point out:
 - `vc=[...]` in the 3 backend services
+- `event=ForwardVC source=...` lines showing services forwarding vector clocks to each other
 - `clear_broadcast_sent final_vc=[...]` in the orchestrator
 - `action=enqueue` and `action=dequeue` in the queue
 - `executing order=` in exactly one executor replica
@@ -75,30 +76,47 @@ docker compose down
 ```
 
 ## Checkpoint 2 deliverables in this repo
-This repository now contains the implementation and documentation required for Checkpoint 2:
+This repository contains the implementation and documentation required for Checkpoint 2:
 
-- vector clocks across `transaction_verification`, `fraud_detection`, and `suggestions`
+- vector clocks across `transaction_verification`, `fraud_detection`, and `suggestions`, driven by the services themselves rather than by the orchestrator
 - order queuing plus 3 replicated order executors
 - leader election and mutual exclusion for queue consumption
-- logs that expose vector-clock values, queue actions, and executor leadership
+- logs that expose vector-clock values, inter-service `ForwardVC` events, queue actions, and executor leadership
 - a reusable verification script at `scripts/checkpoint2-checks.ps1`
 - the required vector-clocks diagram, leader-election diagram, and system-model write-up
 
 ## Vector clocks
 The vector clock has 3 positions in the fixed service order `[TV, FD, SUG]`.
 
+### Service-driven event ordering
+Event ordering is handled by the microservices, not by the orchestrator. The orchestrator only kicks off the two root events on `transaction_verification` and then blocks on `suggestions` for the final pipeline result. All other events, and all causal dependencies between them, are driven by the backend services through inter-service gRPC calls and vector-clock gating.
+
 Each backend service:
-- stores per-order state after `InitOrder`
-- merges the incoming vector clock with its local vector clock
-- increments its own component before logging and replying
+- stores per-order state after `InitOrder`, including a `threading.Lock()` that makes the per-order vector-clock update atomic
+- on every event, merges the incoming vector clock with its local vector clock, then increments its own component before logging and replying
+- forwards its updated vector clock to the next service over a `ForwardVC` RPC when that event causally precedes work on another service
+- gates events that depend on multiple causal predecessors until every predecessor's vector clock has arrived
 - clears the order only if `local_vc <= final_vc`
 
-The diagram below shows one successful execution observed in this repository. The orchestrator starts `ValidateItems` and `ValidateUserData` together, so their relative order may swap between runs. The diagram documents one valid run captured from the logs.
+### Event-to-service mapping and causal dependencies
+| Event | Service | Depends on | Trigger |
+| --- | --- | --- | --- |
+| `ValidateUserData` | TV | (root) | orchestrator |
+| `ValidateItems` | TV | (root) | orchestrator |
+| `CheckUserFraud` | FD | `ValidateUserData` | TV calls FD after `ValidateUserData` |
+| `PrecomputeSuggestions` | SUG | `ValidateItems` | TV calls SUG after `ValidateItems` |
+| `ValidateCardFormat` | TV | `ValidateItems` | TV chains internally after `ValidateItems`, then `ForwardVC` to FD |
+| `CheckCardFraud` | FD | `CheckUserFraud` AND `ValidateCardFormat` | FD fires internally when both predecessor VCs are present, then `ForwardVC` to SUG |
+| `FinalizeSuggestions` | SUG | `PrecomputeSuggestions` AND `CheckCardFraud` | SUG fires internally when both predecessor VCs are present |
 
+FD uses `_try_run_e()` to gate `CheckCardFraud` on the presence of both `d_done` (local `CheckUserFraud`) and `c_received` (forwarded VC from TV). SUG uses `_try_run_g()` to gate `FinalizeSuggestions` on both `f_done` (local `PrecomputeSuggestions`) and `e_received` (forwarded VC from FD). These gates are where the vector clocks actually make a decision instead of being inert metadata.
+
+### Diagram
 ![Vector clocks diagram](./docs/diagrams/vector-clocks.svg)
 
-Observed successful event sequence:
+The orchestrator starts `ValidateItems` and `ValidateUserData` together, so their relative order may swap between runs. The diagram and the table below document one valid run captured from the logs.
 
+### Observed successful event sequence
 | Step | Service | Event | Vector clock |
 | --- | --- | --- | --- |
 | 1 | Transaction verification | `ValidateUserData` | `[1, 0, 0]` |
@@ -109,10 +127,17 @@ Observed successful event sequence:
 | 6 | Fraud detection | `CheckCardFraud` | `[3, 2, 0]` |
 | 7 | Suggestions | `FinalizeSuggestions` | `[3, 2, 2]` |
 
-Bonus behavior:
-- the orchestrator merges all completed event clocks into one `final_vc`
+### Failure propagation
+When an event fails or a prerequisite cannot complete, the responsible service forwards a failure marker (`ForwardVC` with `success=False`) to every downstream service that would have waited for it. FD and SUG record the failed prerequisite and short-circuit any gated event they would otherwise have run. The orchestrator learns about the failure through `SUG.AwaitPipelineResult()` and returns `"status": "Order Rejected"` with a human-readable reason.
+
+### Final clear
+- each service tracks the maximum vector clock it has observed locally
+- the orchestrator merges every completed event clock into one `final_vc`
 - the orchestrator broadcasts `ClearOrder(final_vc)` to all 3 services
 - each service clears only when its local vector clock is not ahead of the final one
+
+### Deep-dive documentation
+A complete write-up of the redesign, including the before/after architecture, the inter-service call flow, and the files that were changed, is available at [docs/vector-clock-redesign.md](./docs/vector-clock-redesign.md).
 
 ## Leader election and mutual exclusion
 The order execution tier uses 3 replicas: `order_executor_1`, `order_executor_2`, and `order_executor_3`.
@@ -139,8 +164,8 @@ The system is a small distributed online-bookstore workflow:
 ![Architecture diagram](./docs/diagrams/architecture-diagram.jpg)
 
 - `frontend` serves the browser UI
-- `orchestrator` accepts checkout requests over HTTP and coordinates the workflow
-- `transaction_verification`, `fraud_detection`, and `suggestions` are gRPC services that participate in the vector-clock event flow
+- `orchestrator` accepts checkout requests over HTTP, initializes the backend services, kicks off the two root events, and blocks on the pipeline result
+- `transaction_verification`, `fraud_detection`, and `suggestions` are gRPC services that drive the vector-clock event flow among themselves
 - `order_queue` stores approved orders in FIFO order
 - `order_executor_1..3` form a replicated execution tier that elects a leader and consumes approved orders
 
@@ -151,16 +176,18 @@ The following diagram shows the end-to-end flow of an order through the system:
 
 ### Communication model
 - the browser communicates with the orchestrator over HTTP
-- the orchestrator communicates with backend services over synchronous gRPC calls
+- the orchestrator communicates with backend services over synchronous gRPC calls, but only for init, two root events, the pipeline result, and the final clear broadcast
+- the 3 backend services communicate with each other over gRPC through `ForwardVC` and direct event RPCs; this is where the vector clocks actually flow
 - executor replicas communicate with each other over gRPC for election, coordinator announcements, and heartbeats
 - the order queue is a separate gRPC service used by the orchestrator and the current leader
 - all services run in Docker Compose on one virtual network, but they still behave as separate processes with separate local state
 
 ### Concurrency and ordering
-- the orchestrator starts multiple validation/fraud/suggestion steps in parallel threads
+- the orchestrator starts the two root validation events in parallel
 - there is no global clock
-- ordering is captured by vector clocks rather than wall-clock timestamps
-- approval requires the full dependency chain to complete successfully
+- ordering is captured by vector clocks rather than wall-clock timestamps, and causal delivery is enforced by the services themselves through `ForwardVC` gating
+- per-order `threading.Lock()` in every backend service protects the vector-clock read-modify-write against concurrent gRPC threads
+- approval requires the full causal dependency chain to complete successfully
 - queue consumption is serialized by leadership: only one replica is allowed to dequeue at a time
 
 ### Failure assumptions
@@ -172,7 +199,7 @@ The following diagram shows the end-to-end flow of an order through the system:
 
 ### Safety properties
 - every order gets a unique `orderId` from the orchestrator
-- vector-clock logs expose causal relationships between backend events
+- vector-clock logs expose causal relationships between backend events, including inter-service `ForwardVC` hops
 - approved orders are enqueued once by the orchestrator
 - only the elected leader dequeues and executes an approved order
 - the clear broadcast uses the merged final vector clock so services do not clear too early
@@ -205,4 +232,5 @@ Prepared input files:
 The required documentation assets are also available in `docs/`:
 - `docs/diagrams/vector-clocks.svg`
 - `docs/diagrams/leader-election.svg`
+- `docs/vector-clock-redesign.md`
 - `docs/README.md`
