@@ -815,7 +815,11 @@ section stays scannable.
   bonus:participant-failure-recovery. Sample line:
   `[PASS] db-failover - DB primary 3 stopped, replica 2 elected new
   primary, writes resumed after replica restore.`
-- [ ] Phase 13 — final commit + push
+- [x] Phase 13 — final commit + push
+  Commit `054d9a8` "Implement Checkpoint 3 phases 7-12" pushed to
+  `origin/individual-sten-qy-li` (15 files, +1855/-20). Local Claude
+  config under `.claude/` was deliberately excluded. The `checkpoint-3`
+  git tag is Step 2's responsibility per §13 and is not created here.
 
 ### Risk notes
 
