@@ -479,8 +479,8 @@ New test payload files should live next to the Checkpoint 2 files:
 - [ ] New test payload files added
 - [ ] Git tag `checkpoint-3` created and pushed
 - [ ] Bonus: concurrent-writes strategy documented
-- [ ] Bonus: participant persists staged transaction to disk before voting commit
-- [ ] Bonus: participant-failure recovery demonstrated
+- [x] Bonus: participant persists staged transaction to disk before voting commit
+- [x] Bonus: participant-failure recovery demonstrated
 - [ ] Bonus: coordinator-failure analysis written
 - [ ] Evaluation slot booked in the Google Sheet
 
@@ -618,8 +618,41 @@ section stays scannable.
   convergence (Book A 10→8 and Book B 6→5 on DB-1/2/3), abort leaves stock
   unchanged, huge request vote-aborts with reason, overlapping prepares
   observe prior reservations, prepare is idempotent.
-- [ ] Phase 5 — 2PC coordinator in executor
-- [ ] Phase 6 — participant-failure bonus (on-disk staged txn)
+- [x] Phase 5 completed. `run_2pc(order)` added to
+  [order_executor/src/app.py](order_executor/src/app.py): discovers the DB
+  primary via `WhoIsPrimary`, fans out Prepare to DB + payment in parallel,
+  logs `2pc_decision=COMMIT|ABORT` *before* phase 2, then sends Commit
+  (or Abort) to both participants. Wired into `consume_loop` after
+  `Dequeue`. End-to-end test passes both paths:
+  - COMMIT: `POST /checkout` with Book Ax2 + Book Bx1 → coordinator logs
+    `2pc_start ... amount=40.97`, `2pc_votes db=True payment=True`,
+    `2pc_decision=COMMIT`, `2pc_commit_applied`; all three DB replicas
+    converge to Book A=8 Book B=5.
+  - ABORT: `POST /checkout` with Book Ax1000 → DB votes abort
+    (`insufficient stock`), `2pc_decision=ABORT`, both participants get
+    Abort, stock unchanged across all replicas.
+- [x] Phase 6 completed. DB participant persists staged txn to
+  `/app/state/txn_<order>.json` (write-temp-then-rename) at the moment
+  it votes commit. On startup the server reloads any `txn_*.json` it
+  finds (logs `recovered_pending order=... items=[...]`) before serving
+  traffic. A `FAIL_NEXT_COMMIT` env counter makes the next N `Commit`
+  RPCs return `UNAVAILABLE` with a retry hint so we can exercise the
+  coordinator loop without crashing the container. The coordinator
+  (`run_2pc` in `order_executor/src/app.py`) now retries `Commit` up to
+  12 times (~40s total, [0.5,1,2,4,4,4,4,4,4,4,4]s backoffs), re-
+  discovering the DB primary between attempts, and logs
+  `2pc_commit_retry` / `2pc_commit_retry_succeeded`. DB participant
+  distinguishes `commit_idempotent` (already-committed set) from
+  `commit_unknown` (no pending + no record) so a freshly-elected primary
+  that never saw Prepare refuses the commit instead of silently
+  succeeding. `utils/other/hotreload.py` skips `/app/state/` so txn
+  persistence no longer triggers dev-mode restarts. Two passing tests:
+  `order_executor/tests/test_2pc_fail_injection.py` (2 injected
+  failures, 3rd attempt wins, convergence Book A 10→9 on DB-1/2/3) and
+  `order_executor/tests/test_2pc_crash_recovery.py` (Prepare + persist,
+  `docker kill books_database_3` mid-retry, restart without override,
+  `recovered_pending` logged, DB-3 re-wins bully, coordinator retry
+  commits, convergence Book A 10→9, state dir cleaned).
 - [ ] Phase 7 — coordinator-failure analysis
 - [ ] Phase 8 — wiring + `CP3_EXECUTION_ONLY` dev flag
 - [ ] Phase 9 — logging sweep

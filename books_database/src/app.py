@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import time
@@ -22,6 +23,19 @@ REPLICA_PORT = os.getenv("REPLICA_PORT", "50058")
 HEARTBEAT_INTERVAL = 2.0
 LEADER_TIMEOUT = 5.0
 REPLICATE_TIMEOUT = 2.0
+
+# Phase 6: participant-failure bonus. Staged transactions are persisted to
+# STATE_DIR at the moment the participant votes commit so that, if the
+# container restarts between Prepare and Commit, the participant can
+# recover the staged state from disk and the coordinator's Commit retry
+# can still succeed.
+STATE_DIR = os.getenv("STATE_DIR", "/app/state")
+
+# Soft fail injection: make the next N Commit RPCs return UNAVAILABLE so
+# we can demonstrate the coordinator's retry loop without having to crash
+# the container (which would trigger a leader failover and lose the
+# primary-only pending buffer). Gets decremented on each injected failure.
+_fail_next_commit_counter = [int(os.getenv("FAIL_NEXT_COMMIT", "0"))]
 
 SEED_STOCK = {
     "Book A": 10,
@@ -80,8 +94,65 @@ seq_counter = 0
 # the decrement to kv_store (and replicates to backups), then drops the
 # pending entry. An Abort just drops. All three handlers take pending_lock
 # so concurrent 2PC ops on the same or different orders serialize cleanly.
+#
+# Phase 6: pending_orders is also persisted to STATE_DIR on vote_commit.
+# Startup recovery re-loads the map so a container restart between
+# Prepare and Commit does not lose the reservation.
 pending_lock = threading.Lock()
 pending_orders = {}
+
+# committed_orders lets Commit distinguish three cases during a retry:
+#   (a) order_id is still pending -> apply the decrement
+#   (b) order_id is in committed_orders -> idempotent success (safe no-op)
+#   (c) order_id is in neither -> uncertain; refuse with success=False so
+#       the coordinator keeps retrying until the right replica (the one
+#       that ran Prepare) becomes reachable again.
+# Case (c) is what protects us during a brief failover window: a freshly
+# elected primary that never saw Prepare must NOT pretend it committed
+# the order. committed_orders is a set of order_ids (bounded by the
+# number of orders processed this container lifetime -- fine for a demo).
+committed_orders = set()
+aborted_orders = set()
+
+
+def _txn_file(order_id):
+    safe = order_id.replace("/", "_").replace("\\", "_")
+    return os.path.join(STATE_DIR, f"txn_{safe}.json")
+
+
+def persist_pending(order_id, items):
+    """Write-then-rename so a crashed write never leaves a half-file."""
+    os.makedirs(STATE_DIR, exist_ok=True)
+    path = _txn_file(order_id)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({"items": [[t, q] for t, q in items]}, f)
+    os.replace(tmp, path)
+
+
+def remove_persisted(order_id):
+    try:
+        os.remove(_txn_file(order_id))
+    except FileNotFoundError:
+        pass
+
+
+def load_persisted_all():
+    if not os.path.isdir(STATE_DIR):
+        return {}
+    out = {}
+    for fname in os.listdir(STATE_DIR):
+        if not (fname.startswith("txn_") and fname.endswith(".json")):
+            continue
+        path = os.path.join(STATE_DIR, fname)
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            order_id = fname[len("txn_"):-len(".json")]
+            out[order_id] = [(t, int(q)) for t, q in data["items"]]
+        except Exception as exc:
+            print(f"[DB-{REPLICA_ID}] recovery_skip file={fname} err={exc!r}")
+    return out
 
 
 def get_key_lock(title):
@@ -477,12 +548,25 @@ class BooksDatabaseService(db_grpc.BooksDatabaseServiceServicer):
                     message=f"insufficient stock: {insufficient}",
                 )
 
+            # Persist first, then mark pending. If persist fails (disk error)
+            # the pending buffer stays empty and we vote abort.
+            try:
+                persist_pending(order_id, items)
+            except Exception as exc:
+                print(
+                    f"[DB-{REPLICA_ID}] prepare_persist_failed "
+                    f"order={order_id} err={exc!r}"
+                )
+                return db_pb2.PrepareResponse(
+                    vote_commit=False,
+                    message=f"persist failed: {exc!r}",
+                )
             pending_orders[order_id] = items
 
         items_repr = ",".join(f"{t}x{q}" for t, q in items)
         print(
             f"[DB-{REPLICA_ID}] prepare_vote_commit "
-            f"order={order_id} items=[{items_repr}]"
+            f"order={order_id} items=[{items_repr}] persisted=yes"
         )
         return db_pb2.PrepareResponse(vote_commit=True, message="ok")
 
@@ -504,16 +588,44 @@ class BooksDatabaseService(db_grpc.BooksDatabaseServiceServicer):
 
         order_id = request.order_id
 
+        # Phase 6 fail injection. If the env var asked us to fail the next N
+        # Commits, do so without touching kv_store or the pending entry so
+        # the coordinator's retry (after the counter reaches zero) still
+        # finds the reservation and completes the transaction.
+        if _fail_next_commit_counter[0] > 0:
+            _fail_next_commit_counter[0] -= 1
+            remaining = _fail_next_commit_counter[0]
+            print(
+                f"[DB-{REPLICA_ID}] commit_fail_injected "
+                f"order={order_id} remaining_failures={remaining}"
+            )
+            return db_pb2.CommitResponse(
+                success=False,
+                message=f"injected failure; retry (remaining={remaining})",
+            )
+
         with pending_lock:
             items = pending_orders.get(order_id)
             if items is None:
-                # Either never prepared or already committed. Treat as no-op.
+                # No pending reservation. Distinguish "already committed"
+                # (safe, idempotent success) from "never heard of this
+                # order" (uncertain; refuse so the coordinator retries
+                # against the replica that did see Prepare).
+                if order_id in committed_orders:
+                    print(
+                        f"[DB-{REPLICA_ID}] commit_idempotent "
+                        f"order={order_id} reason=already-committed"
+                    )
+                    return db_pb2.CommitResponse(
+                        success=True, message="already committed"
+                    )
                 print(
-                    f"[DB-{REPLICA_ID}] commit_noop order={order_id} "
-                    f"reason=no-pending"
+                    f"[DB-{REPLICA_ID}] commit_unknown "
+                    f"order={order_id} reason=no-pending-no-record"
                 )
                 return db_pb2.CommitResponse(
-                    success=True, message="no pending (already committed?)"
+                    success=False,
+                    message="unknown order; never prepared on this replica",
                 )
 
             applied = []
@@ -542,6 +654,8 @@ class BooksDatabaseService(db_grpc.BooksDatabaseServiceServicer):
                 applied.append((title, old, new_value, seq, acked))
 
             del pending_orders[order_id]
+            committed_orders.add(order_id)
+            remove_persisted(order_id)
 
         for title, old, new_value, seq, acked in applied:
             print(
@@ -558,6 +672,8 @@ class BooksDatabaseService(db_grpc.BooksDatabaseServiceServicer):
         order_id = request.order_id
         with pending_lock:
             items = pending_orders.pop(order_id, None)
+            aborted_orders.add(order_id)
+            remove_persisted(order_id)
 
         if items is None:
             print(f"[DB-{REPLICA_ID}] abort_noop order={order_id}")
@@ -572,6 +688,21 @@ class BooksDatabaseService(db_grpc.BooksDatabaseServiceServicer):
 
 
 def serve():
+    # Phase 6 recovery: reload any staged transactions the previous instance
+    # persisted before it died. From this point on pending_orders is
+    # authoritative again and the coordinator's next Commit or Abort will
+    # finish the transaction.
+    recovered = load_persisted_all()
+    if recovered:
+        with pending_lock:
+            pending_orders.update(recovered)
+        for oid, items in recovered.items():
+            items_repr = ",".join(f"{t}x{q}" for t, q in items)
+            print(
+                f"[DB-{REPLICA_ID}] recovered_pending "
+                f"order={oid} items=[{items_repr}]"
+            )
+
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     db_grpc.add_BooksDatabaseServiceServicer_to_server(
         BooksDatabaseService(), server
@@ -580,7 +711,10 @@ def serve():
     server.start()
     print(
         f"[DB-{REPLICA_ID}] listening on port {REPLICA_PORT} "
-        f"seeded_titles={list(SEED_STOCK.keys())}"
+        f"seeded_titles={list(SEED_STOCK.keys())} "
+        f"state_dir={STATE_DIR} "
+        f"recovered_pending={len(recovered)} "
+        f"fail_next_commit={_fail_next_commit_counter[0]}"
     )
 
     threading.Thread(target=heartbeat_loop, daemon=True).start()

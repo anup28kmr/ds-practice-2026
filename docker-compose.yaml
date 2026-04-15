@@ -176,9 +176,11 @@ services:
       - REPLICA_ID=1
       - REPLICA_PORT=50058
       - PEERS=1@books_database_1:50058,2@books_database_2:50058,3@books_database_3:50058
+      - STATE_DIR=/app/state
     volumes:
       - ./utils:/app/utils
       - ./books_database/src:/app/books_database/src
+      - ./books_database/state/1:/app/state
 
   books_database_2:
     build:
@@ -193,9 +195,11 @@ services:
       - REPLICA_ID=2
       - REPLICA_PORT=50058
       - PEERS=1@books_database_1:50058,2@books_database_2:50058,3@books_database_3:50058
+      - STATE_DIR=/app/state
     volumes:
       - ./utils:/app/utils
       - ./books_database/src:/app/books_database/src
+      - ./books_database/state/2:/app/state
 
   books_database_3:
     build:
@@ -210,6 +214,8 @@ services:
       - REPLICA_ID=3
       - REPLICA_PORT=50058
       - PEERS=1@books_database_1:50058,2@books_database_2:50058,3@books_database_3:50058
+      - STATE_DIR=/app/state
     volumes:
       - ./utils:/app/utils
       - ./books_database/src:/app/books_database/src
+      - ./books_database/state/3:/app/state
