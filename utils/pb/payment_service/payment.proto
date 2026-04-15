@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package payment_service;
+
+// Payment service: 2PC participant. For the demo it never actually charges
+// a card - it just logs the call and returns VoteCommit on Prepare.
+service PaymentService {
+  rpc Prepare (PaymentPrepareRequest) returns (PaymentPrepareResponse);
+  rpc Commit (PaymentCommitRequest) returns (PaymentCommitResponse);
+  rpc Abort (PaymentAbortRequest) returns (PaymentAbortResponse);
+}
+
+message PaymentPrepareRequest {
+  string order_id = 1;
+  double amount = 2;
+  string user_name = 3;
+}
+
+message PaymentPrepareResponse {
+  bool vote_commit = 1;
+  string message = 2;
+}
+
+message PaymentCommitRequest {
+  string order_id = 1;
+}
+
+message PaymentCommitResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message PaymentAbortRequest {
+  string order_id = 1;
+}
+
+message PaymentAbortResponse {
+  bool success = 1;
+  string message = 2;
+}

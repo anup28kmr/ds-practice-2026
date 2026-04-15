@@ -21,6 +21,11 @@ message VectorClock {
   repeated int32 values = 1;
 }
 
+message OrderItem {
+  string title = 1;
+  int32 quantity = 2;
+}
+
 message OrderData {
   string order_id = 1;
   string user_name = 2;
@@ -30,6 +35,7 @@ message OrderData {
   string cvv = 6;
   int32 item_count = 7;
   bool terms_accepted = 8;
+  repeated OrderItem items = 9;
 }
 
 message InitOrderRequest {

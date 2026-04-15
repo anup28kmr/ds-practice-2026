@@ -99,6 +99,10 @@ services:
       - ./order_executor/src:/app/order_executor/src
     depends_on:
       - order_queue
+      - payment_service
+      - books_database_1
+      - books_database_2
+      - books_database_3
 
   order_executor_2:
     build:
@@ -117,6 +121,10 @@ services:
       - ./order_executor/src:/app/order_executor/src
     depends_on:
       - order_queue
+      - payment_service
+      - books_database_1
+      - books_database_2
+      - books_database_3
 
   order_executor_3:
     build:
@@ -135,3 +143,73 @@ services:
       - ./order_executor/src:/app/order_executor/src
     depends_on:
       - order_queue
+      - payment_service
+      - books_database_1
+      - books_database_2
+      - books_database_3
+
+  payment_service:
+    build:
+      context: ./
+      dockerfile: ./payment_service/Dockerfile
+    ports:
+      - "50061:50061"
+    environment:
+      - PYTHONUNBUFFERED=TRUE
+      - PYTHONFILE=/app/payment_service/src/app.py
+      - PYTHONPATH=/app
+      - PAYMENT_PORT=50061
+    volumes:
+      - ./utils:/app/utils
+      - ./payment_service/src:/app/payment_service/src
+
+  books_database_1:
+    build:
+      context: ./
+      dockerfile: ./books_database/Dockerfile
+    ports:
+      - "50058:50058"
+    environment:
+      - PYTHONUNBUFFERED=TRUE
+      - PYTHONFILE=/app/books_database/src/app.py
+      - PYTHONPATH=/app
+      - REPLICA_ID=1
+      - REPLICA_PORT=50058
+      - PEERS=1@books_database_1:50058,2@books_database_2:50058,3@books_database_3:50058
+    volumes:
+      - ./utils:/app/utils
+      - ./books_database/src:/app/books_database/src
+
+  books_database_2:
+    build:
+      context: ./
+      dockerfile: ./books_database/Dockerfile
+    ports:
+      - "50059:50058"
+    environment:
+      - PYTHONUNBUFFERED=TRUE
+      - PYTHONFILE=/app/books_database/src/app.py
+      - PYTHONPATH=/app
+      - REPLICA_ID=2
+      - REPLICA_PORT=50058
+      - PEERS=1@books_database_1:50058,2@books_database_2:50058,3@books_database_3:50058
+    volumes:
+      - ./utils:/app/utils
+      - ./books_database/src:/app/books_database/src
+
+  books_database_3:
+    build:
+      context: ./
+      dockerfile: ./books_database/Dockerfile
+    ports:
+      - "50060:50058"
+    environment:
+      - PYTHONUNBUFFERED=TRUE
+      - PYTHONFILE=/app/books_database/src/app.py
+      - PYTHONPATH=/app
+      - REPLICA_ID=3
+      - REPLICA_PORT=50058
+      - PEERS=1@books_database_1:50058,2@books_database_2:50058,3@books_database_3:50058
+    volumes:
+      - ./utils:/app/utils
+      - ./books_database/src:/app/books_database/src

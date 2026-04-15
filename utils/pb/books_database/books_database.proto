@@ -1,0 +1,130 @@
+syntax = "proto3";
+
+package books_database;
+
+service BooksDatabaseService {
+  // Client-facing RPCs. In Phase 2 clients should send these to the primary.
+  rpc Read (ReadRequest) returns (ReadResponse);
+  rpc Write (WriteRequest) returns (WriteResponse);
+
+  // Debug/ops RPC that reads the local replica's copy without the
+  // primary-only check. Used by the convergence check in
+  // scripts/checkpoint3-checks.ps1 to verify that all three replicas hold
+  // the same value after a committed write. Never used by the orchestrator
+  // or the 2PC coordinator.
+  rpc ReadLocal (ReadRequest) returns (ReadResponse);
+
+  // Internal: primary -> backup synchronous replication of a committed write.
+  rpc ReplicateWrite (ReplicateWriteRequest) returns (ReplicateWriteResponse);
+
+  // Primary discovery. Any replica answers; the response points to the
+  // replica that currently believes itself to be primary (or replies
+  // leader_id=0 if no primary is known yet).
+  rpc WhoIsPrimary (WhoIsPrimaryRequest) returns (WhoIsPrimaryResponse);
+
+  // Bully-style election, mirroring the pattern already used by the
+  // order_executor control service.
+  rpc Election (ElectionRequest) returns (ElectionResponse);
+  rpc Coordinator (CoordinatorRequest) returns (Ack);
+  rpc Heartbeat (HeartbeatRequest) returns (Ack);
+
+  // 2PC participant-side RPCs. The primary acts as the participant; backups
+  // pick up committed state via ReplicateWrite inside Commit.
+  rpc Prepare (PrepareRequest) returns (PrepareResponse);
+  rpc Commit (CommitRequest) returns (CommitResponse);
+  rpc Abort (AbortRequest) returns (AbortResponse);
+}
+
+message ReadRequest {
+  string title = 1;
+}
+
+message ReadResponse {
+  bool success = 1;
+  int32 quantity = 2;
+  string message = 3;
+}
+
+message WriteRequest {
+  string title = 1;
+  int32 quantity = 2;
+}
+
+message WriteResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message ReplicateWriteRequest {
+  string title = 1;
+  int32 quantity = 2;
+  int64 seq = 3;
+  int32 from_replica = 4;
+}
+
+message ReplicateWriteResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message WhoIsPrimaryRequest {}
+
+message WhoIsPrimaryResponse {
+  int32 leader_id = 1;
+  string leader_addr = 2;
+}
+
+message ElectionRequest {
+  int32 candidate_id = 1;
+}
+
+message ElectionResponse {
+  bool alive = 1;
+}
+
+message CoordinatorRequest {
+  int32 leader_id = 1;
+}
+
+message HeartbeatRequest {
+  int32 leader_id = 1;
+}
+
+message Ack {
+  bool ok = 1;
+}
+
+// --- 2PC participant-side messages ---
+
+message PrepareItem {
+  string title = 1;
+  int32 quantity = 2;
+}
+
+message PrepareRequest {
+  string order_id = 1;
+  repeated PrepareItem items = 2;
+}
+
+message PrepareResponse {
+  bool vote_commit = 1;
+  string message = 2;
+}
+
+message CommitRequest {
+  string order_id = 1;
+}
+
+message CommitResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message AbortRequest {
+  string order_id = 1;
+}
+
+message AbortResponse {
+  bool success = 1;
+  string message = 2;
+}

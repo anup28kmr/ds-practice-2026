@@ -58,7 +58,7 @@ def merge_vcs(*vectors):
 
 
 def build_order_kwargs(
-    user_name, user_contact, card_number, expiration_date, cvv, item_count, terms_accepted
+    user_name, user_contact, card_number, expiration_date, cvv, item_count, terms_accepted, items
 ):
     return {
         "user_name": user_name,
@@ -68,7 +68,35 @@ def build_order_kwargs(
         "cvv": cvv,
         "item_count": item_count,
         "terms_accepted": terms_accepted,
+        "items": items,
     }
+
+
+def parse_items(raw_items):
+    # Accept both new "title" key and legacy "name" key so old frontends still work.
+    parsed = []
+    for it in raw_items or []:
+        if not isinstance(it, dict):
+            continue
+        title = (it.get("title") or it.get("name") or "").strip()
+        try:
+            qty = int(it.get("quantity", 0))
+        except (TypeError, ValueError):
+            qty = 0
+        if not title or qty <= 0:
+            continue
+        parsed.append({"title": title, "quantity": qty})
+    return parsed
+
+
+def _make_order_data(pb_module, order_id, order_kwargs):
+    items_raw = order_kwargs.get("items", [])
+    scalar_kwargs = {k: v for k, v in order_kwargs.items() if k != "items"}
+    item_protos = [
+        pb_module.OrderItem(title=i["title"], quantity=i["quantity"])
+        for i in items_raw
+    ]
+    return pb_module.OrderData(order_id=order_id, items=item_protos, **scalar_kwargs)
 
 
 # --- Service init calls (unchanged) ---
@@ -77,7 +105,7 @@ def init_fraud_service(order_id, order_kwargs):
     with grpc.insecure_channel("fraud_detection:50051") as channel:
         stub = fraud_detection_grpc.FraudDetectionServiceStub(channel)
         request = fraud_detection.InitOrderRequest(
-            order=fraud_detection.OrderData(order_id=order_id, **order_kwargs)
+            order=_make_order_data(fraud_detection, order_id, order_kwargs)
         )
         return stub.InitOrder(request, timeout=5.0)
 
@@ -86,7 +114,7 @@ def init_transaction_service(order_id, order_kwargs):
     with grpc.insecure_channel("transaction_verification:50052") as channel:
         stub = transaction_verification_grpc.TransactionVerificationServiceStub(channel)
         request = transaction_verification.InitOrderRequest(
-            order=transaction_verification.OrderData(order_id=order_id, **order_kwargs)
+            order=_make_order_data(transaction_verification, order_id, order_kwargs)
         )
         return stub.InitOrder(request, timeout=5.0)
 
@@ -95,7 +123,7 @@ def init_suggestions_service(order_id, order_kwargs):
     with grpc.insecure_channel("suggestions:50053") as channel:
         stub = suggestions_grpc.SuggestionsServiceStub(channel)
         request = suggestions.InitOrderRequest(
-            order=suggestions.OrderData(order_id=order_id, **order_kwargs)
+            order=_make_order_data(suggestions, order_id, order_kwargs)
         )
         return stub.InitOrder(request, timeout=5.0)
 
@@ -137,16 +165,7 @@ def enqueue_order(order_id, order_kwargs):
     with grpc.insecure_channel("order_queue:50054") as channel:
         stub = order_queue_grpc.OrderQueueServiceStub(channel)
         request = order_queue.EnqueueRequest(
-            order=order_queue.OrderData(
-                order_id=order_id,
-                user_name=order_kwargs["user_name"],
-                user_contact=order_kwargs["user_contact"],
-                card_number=order_kwargs["card_number"],
-                expiration_date=order_kwargs["expiration_date"],
-                cvv=order_kwargs["cvv"],
-                item_count=order_kwargs["item_count"],
-                terms_accepted=order_kwargs["terms_accepted"],
-            )
+            order=_make_order_data(order_queue, order_id, order_kwargs)
         )
         return stub.Enqueue(request, timeout=5.0)
 
@@ -252,12 +271,15 @@ def checkout():
             }
         }, 400
 
-    item_count = len(items)
+    parsed_items = parse_items(items)
+    item_count = len(parsed_items)
     order_id = str(uuid.uuid4())
 
+    items_repr = ",".join(f"{i['title']}x{i['quantity']}" for i in parsed_items)
     print(
         f"[ORCH] order={order_id} received_checkout "
-        f"user={user_name} card={mask_fixed(card_number)} item_count={item_count}"
+        f"user={user_name} card={mask_fixed(card_number)} "
+        f"item_count={item_count} items=[{items_repr}]"
     )
 
     order_kwargs = build_order_kwargs(
@@ -268,6 +290,7 @@ def checkout():
         cvv=cvv,
         item_count=item_count,
         terms_accepted=terms_accepted,
+        items=parsed_items,
     )
 
     # --- Phase 1: Initialize all backend services ---

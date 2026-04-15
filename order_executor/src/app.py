@@ -248,10 +248,14 @@ def consume_loop():
         if not response.success:
             continue
 
+        items_repr = ",".join(
+            f"{i.title}x{i.quantity}" for i in response.order.items
+        )
         print(
             f"[EXEC-{EXECUTOR_ID}] leader={EXECUTOR_ID} "
             f"executing order={response.order.order_id} "
-            f'user="{response.order.user_name}" item_count={response.order.item_count}'
+            f'user="{response.order.user_name}" '
+            f"item_count={response.order.item_count} items=[{items_repr}]"
         )
         print("Order is being executed...")
 
