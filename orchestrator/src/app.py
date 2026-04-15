@@ -43,6 +43,21 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 
+# CP3_EXECUTION_ONLY lets us skip the Checkpoint 2 validation pipeline
+# (TV / FD / SUG + vector-clock gating + clear broadcast) and go straight
+# from input validation to enqueue. It is a dev-time flag for iterating
+# on the Checkpoint 3 2PC path without waiting ~second(s) for the CP2
+# pipeline on every checkout. The final demo (§6 Option A in
+# Charlie-Lima-Alfa.md) keeps this flag off.
+CP3_EXECUTION_ONLY = os.getenv("CP3_EXECUTION_ONLY", "").strip().lower() in (
+    "1", "true", "yes", "on"
+)
+print(
+    f"[ORCH] startup cp3_execution_only={CP3_EXECUTION_ONLY} "
+    f"(set CP3_EXECUTION_ONLY=true to skip the CP2 validation pipeline)"
+)
+
+
 def mask_fixed(card: str) -> str:
     digits = "".join(c for c in str(card) if c.isdigit())
     masked = "*" * 12 + digits[-4:].rjust(4, "*")
@@ -292,6 +307,45 @@ def checkout():
         terms_accepted=terms_accepted,
         items=parsed_items,
     )
+
+    # --- Option C fast-path: skip the CP2 pipeline entirely ---
+    if CP3_EXECUTION_ONLY:
+        print(
+            f"[ORCH] order={order_id} cp3_execution_only=true "
+            f"skipping CP2 pipeline (init/root-events/await/clear)"
+        )
+        try:
+            enqueue_response = enqueue_order(order_id, order_kwargs)
+        except Exception as e:
+            print(f"[ORCH] order={order_id} enqueue_error={e}")
+            return {
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Order could not be queued.",
+                }
+            }, 500
+
+        if not enqueue_response.success:
+            print(
+                f"[ORCH] order={order_id} enqueue_failed "
+                f"message={enqueue_response.message}"
+            )
+            return {
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": enqueue_response.message,
+                }
+            }, 500
+
+        print(
+            f"[ORCH] order={order_id} enqueue_success "
+            f"final_status=APPROVED path=cp3_execution_only"
+        )
+        return {
+            "orderId": order_id,
+            "status": "Order Approved",
+            "suggestedBooks": [],
+        }, 200
 
     # --- Phase 1: Initialize all backend services ---
     try:

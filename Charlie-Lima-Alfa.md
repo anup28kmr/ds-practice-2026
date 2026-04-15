@@ -468,20 +468,20 @@ New test payload files should live next to the Checkpoint 2 files:
 - [ ] `payment_service` with Prepare/Commit/Abort
 - [ ] 2PC coordinator logic inside `order_executor`
 - [ ] Database participant supports Prepare/Commit/Abort
-- [ ] `CP3_EXECUTION_ONLY` dev-time flag in orchestrator
-- [ ] Logs updated for replication, consistency, payment, 2PC
-- [ ] In-code docstrings added to 2PC coordinator, DB participant, payment participant, recovery helpers
-- [ ] `docs/diagrams/consistency-protocol.svg` added
-- [ ] `docs/diagrams/commitment-protocol.svg` added
-- [ ] README updated to Checkpoint 3
-- [ ] `docs/consistency-redesign.md` and `docs/commitment-protocol.md` added
-- [ ] `scripts/checkpoint3-checks.ps1` passes end to end (including replica-convergence check)
-- [ ] New test payload files added
+- [x] `CP3_EXECUTION_ONLY` dev-time flag in orchestrator
+- [x] Logs updated for replication, consistency, payment, 2PC
+- [x] In-code docstrings added to 2PC coordinator, DB participant, payment participant, recovery helpers
+- [x] `docs/diagrams/consistency-protocol.svg` added
+- [x] `docs/diagrams/commitment-protocol.svg` added
+- [x] README updated to Checkpoint 3
+- [x] `docs/consistency-redesign.md` and `docs/commitment-protocol.md` added
+- [x] `scripts/checkpoint3-checks.ps1` passes end to end (including replica-convergence check)
+- [x] New test payload files added
 - [ ] Git tag `checkpoint-3` created and pushed
 - [ ] Bonus: concurrent-writes strategy documented
 - [x] Bonus: participant persists staged transaction to disk before voting commit
 - [x] Bonus: participant-failure recovery demonstrated
-- [ ] Bonus: coordinator-failure analysis written
+- [x] Bonus: coordinator-failure analysis written
 - [ ] Evaluation slot booked in the Google Sheet
 
 ---
@@ -653,12 +653,168 @@ section stays scannable.
   `docker kill books_database_3` mid-retry, restart without override,
   `recovered_pending` logged, DB-3 re-wins bully, coordinator retry
   commits, convergence Book A 10→9, state dir cleaned).
-- [ ] Phase 7 — coordinator-failure analysis
-- [ ] Phase 8 — wiring + `CP3_EXECUTION_ONLY` dev flag
-- [ ] Phase 9 — logging sweep
-- [ ] Phase 10 — diagrams
-- [ ] Phase 11 — documentation
-- [ ] Phase 12 — verification script
+- [x] Phase 7 completed. Added
+  [docs/commitment-protocol.md](docs/commitment-protocol.md), a
+  self-contained analysis of coordinator failure in our 2PC setup.
+  Walks through the four crash windows (W1–W4), explains why a prepared
+  participant is forced to block, and documents what our repo already
+  provides (bully re-election of the leader executor, queue redelivery,
+  idempotent `Prepare`/`Commit`/`Abort` on both participants,
+  `committed_orders`/`commit_unknown` distinction) versus what it does
+  not (the coordinator's `2pc_decision` line is stdout-only, not
+  durable). Covers four literature mitigations — 3PC (non-blocking
+  under crash failures, extra RPC round), highest-ID replacement
+  coordinator with a `/app/executor_state/decision_*.json` log (the
+  pragmatic fit for our topology, reusing the existing executor bully
+  election), cooperative termination (participant-to-participant
+  recovery), and Paxos Commit (consensus-based, out of scope). References
+  the Phase 6 bonus tests and concludes with the concrete follow-up
+  (durable decision record on the coordinator) that would close the
+  W3/W4 gap.
+- [x] Phase 8 completed. `CP3_EXECUTION_ONLY` env flag added to
+  [orchestrator/src/app.py](orchestrator/src/app.py): when truthy
+  (`1`/`true`/`yes`/`on`, case-insensitive) the `/checkout` handler
+  skips Init + root events + `AwaitPipelineResult` + clear broadcast
+  and goes straight to `enqueue_order` after basic input validation,
+  returning `Order Approved` with empty `suggestedBooks`. Default is
+  off so the full CP2+CP3 pipeline runs (Option A for the demo).
+  Startup log line `[ORCH] startup cp3_execution_only=True|False`
+  records the mode. New
+  [docker-compose.cp3-only.yaml](docker-compose.cp3-only.yaml) override
+  flips the flag without mutating the main compose file. Both modes
+  verified end-to-end on the running stack:
+  - Option A (default): `test_2pc_end_to_end.py` happy + abort paths
+    pass; orchestrator logs show
+    `initialization_complete → starting_root_events → clear_broadcast_sent
+    final_vc=[3,2,2] → final_status=APPROVED`, 2PC commits, DB-1/2/3
+    converge.
+  - Option C (flag on): new
+    [orchestrator/tests/test_cp3_execution_only.py](orchestrator/tests/test_cp3_execution_only.py)
+    confirms orchestrator logs
+    `cp3_execution_only=true skipping CP2 pipeline` for the order and
+    asserts the absence of `initialization_complete`,
+    `starting_root_events`, and `clear_broadcast_sent` for that order,
+    response has `suggestedBooks=[]`, 2PC still commits via the
+    executor, and stock decrements on DB-1/2/3.
+- [x] Phase 9 — logging sweep. Audited §7 coverage across all CP3
+  components; the key=value style used in orchestrator/src/app.py is
+  already applied consistently. Verified the full 2PC trace via a live
+  `/checkout` on the stack (order=f2a70cca…):
+  - `payment_service`: `prepare_vote_commit … amount=12.99` →
+    `commit_applied`.
+  - `order_executor_3` (leader): `2pc_start`, `2pc_votes db=(vote_commit=True,msg='ok')
+    payment=(vote_commit=True,msg='ok')`, `2pc_decision decision=COMMIT
+    participants=[db,payment]`, `2pc_commit_applied`, `order_done status=committed`.
+  - `books_database_3` (primary): `prepare_vote_commit items=[Book Ax1] persisted=yes`,
+    `commit_applied title="Book A" seq=8 old=9 new=8 backups_acked=[1,2]`.
+  - `books_database_1/2` (backups): `replicate_applied from_primary=3 title="Book A"
+    seq=8 old=9 new=8` on each.
+  One gap closed: the 2PC retry loop was silent on DB primary re-
+  discovery. Added `2pc_primary_changed` and `2pc_primary_unknown` log
+  lines in
+  [order_executor/src/app.py](order_executor/src/app.py) so bully
+  failover during a coordinator retry is visible in the trace. All
+  other §7 items (DB replication, consistency protocol primary= lines,
+  Payment/2PC Prepare/Commit/Abort, decision record with participants
+  and votes) were already present from earlier phases.
+- [x] Phase 10 — diagrams. Authored two new SVGs in the same lane-and-
+  box style as
+  [docs/diagrams/vector-clocks.svg](docs/diagrams/vector-clocks.svg) and
+  [docs/diagrams/leader-election.svg](docs/diagrams/leader-election.svg):
+  - [docs/diagrams/consistency-protocol.svg](docs/diagrams/consistency-protocol.svg)
+    — four lanes (executor client, primary `books_database_3`, the two
+    backups `_1` and `_2`). Shows the post-election coordinator
+    announcement (`primary=3`), a full Write flow with the primary
+    fanning `ReplicateWrite(seq=42)` to both backups and blocking until
+    both `replicate_applied` acks land before logging
+    `write_committed backups_acked=[1,2]`, and a Read that is served
+    only by the primary. Side notes cover why replication is
+    synchronous and how bully failover transparently re-targets the
+    client.
+  - [docs/diagrams/commitment-protocol.svg](docs/diagrams/commitment-protocol.svg)
+    — three lanes (executor coordinator, `books_database` primary,
+    `payment_service`). Case A shows the happy path: parallel
+    `Prepare` fan-out, `vote_commit=true` from both, the
+    `2pc_decision=COMMIT participants=[db,payment]` decision record
+    written before phase 2, then `Commit` to both and
+    `2pc_commit_applied`. Case B shows payment voting abort (e.g.
+    amount over `MAX_AMOUNT`) and the coordinator sending `Abort` to
+    both, producing `2pc_decision=ABORT`. Side notes call out the
+    stdout decision record and the Phase-6 participant-recovery hook.
+  Both files parse cleanly as XML
+  (`consistency-protocol.svg` viewBox 1200×980, 82 nodes;
+  `commitment-protocol.svg` viewBox 1200×1200, 98 nodes). README
+  wiring lands in Phase 11.
+- [x] Phase 11 — documentation. Three deliverables landed:
+  - **README rewrite.** Top header renamed to Checkpoint 3; added two
+    new top-level sections ([README.md](README.md)):
+    "Replicated database and consistency protocol" and "Distributed
+    commitment protocol (2PC)". Each section states what it delivers,
+    embeds its diagram, lists the log lines that prove it, and links
+    the design note. Service count updated from 9 to 13.
+  - **Design notes in [docs/](docs/).** New
+    [docs/consistency-redesign.md](docs/consistency-redesign.md)
+    explains the primary-backup + synchronous-replication choice,
+    summarises the protocol, walks through failover, shows how 2PC
+    sits on top, lists the expected log lines, and calls out known
+    limitations. Existing
+    [docs/commitment-protocol.md](docs/commitment-protocol.md) was
+    re-framed in its opening paragraph so readers see it is both the
+    2PC primer and the §5.4 coordinator-failure analysis in one file.
+  - **In-code docstrings.** Added method docstrings to the three
+    payment_service 2PC handlers
+    (`Prepare`/`Commit`/`Abort` in
+    [payment_service/src/app.py](payment_service/src/app.py)); expanded
+    the `persist_pending` docstring and added new docstrings to
+    `remove_persisted` and `load_persisted_all` in
+    [books_database/src/app.py](books_database/src/app.py) covering
+    the write-then-rename invariant and the startup recovery scan.
+    The 2PC coordinator (`run_2pc` in
+    [order_executor/src/app.py](order_executor/src/app.py)) and the
+    books_database Prepare/Commit/Abort handlers already had their
+    docstrings from Phases 5–6.
+  Also fixed a minor inaccuracy in the commitment-protocol diagram's
+  abort case: the current code has DB (not payment) voting abort on
+  insufficient stock, so the Case-B arrows were relabelled to match.
+- [x] Phase 12 — verification script
+  Delivered three new files:
+  - [scripts/checkpoint3-checks.ps1](scripts/checkpoint3-checks.ps1) — the
+    end-to-end verifier. Flags: `-SkipBuild` (reuse images for fast
+    iteration), `-SkipFailover`, `-SkipBonus`. On every run it first does
+    `docker compose down -v` so state starts from seed, then brings the
+    stack up, waits for orchestrator and DB primary, and runs six
+    assertion groups: 2PC happy path, 2PC oversold → abort, replica
+    convergence, DB primary failover, and the participant-failure-recovery
+    bonus. Each check writes a `[PASS]`/`[FAIL]` line and feeds a final
+    summary with a non-zero exit code on any failure.
+  - [scripts/_cp3_db_probe.py](scripts/_cp3_db_probe.py) — a small gRPC
+    helper called from PowerShell. Subcommands `read-stock <title>`
+    (with `--tolerate-missing` for post-failover reads), `find-primary`,
+    `all-reachable`. The PS script parses `DB-<id>=<qty>` lines back.
+  - [test_checkout_oversold.json](test_checkout_oversold.json) — payload
+    asking for 999 copies of Book A so the DB participant votes abort,
+    which exercises the §5.4 ABORT path end to end; it sits next to the
+    existing [test_checkout.json](test_checkout.json) used for the
+    happy-path commit.
+  Along the way, a few hygiene fixes fell out of running under
+  `Set-StrictMode -Version Latest`: `Run-Compose` now wraps docker compose
+  calls so stderr doesn't trip `$ErrorActionPreference='Stop'`; HTTP calls
+  go through a short inline Python block via `urllib.request` because
+  `Invoke-WebRequest` intermittently NREs against our orchestrator;
+  `$Matches` is avoided in favour of `[regex]::Match` for reliable capture;
+  `Sort-Object -Unique` results are array-wrapped before `.Count`; and the
+  failover test re-drives a write after restoring the old primary, because
+  only staged transactions are persisted — committed state resets to seed
+  on restart, so the first post-restore write is what re-synchronises the
+  backups through ReplicateWrite.
+  Verification run (clean state, `-SkipBuild`): all 18 checks pass —
+  docker/compose version, compose config, compose down/up, orchestrator
+  ready, DB all-reachable, DB primary elected, compose ps, four
+  `py-compile` checks, 2pc:valid-commit, 2pc:oversold-abort,
+  convergence:read-all-replicas, db-failover, and
+  bonus:participant-failure-recovery. Sample line:
+  `[PASS] db-failover - DB primary 3 stopped, replica 2 elected new
+  primary, writes resumed after replica restore.`
 - [ ] Phase 13 — final commit + push
 
 ### Risk notes

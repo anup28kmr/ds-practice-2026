@@ -1,4 +1,11 @@
-# Distributed Systems Practice Project - Checkpoint 2
+# Distributed Systems Practice Project - Checkpoint 3
+
+This checkpoint extends the Checkpoint 2 system with two new distributed features:
+
+- a **replicated books database** (3 replicas, primary-backup, synchronous replication) — see [Replicated database and consistency protocol](#replicated-database-and-consistency-protocol)
+- a **distributed commitment protocol (2PC)** across the books database primary and a new payment service — see [Distributed commitment protocol (2PC)](#distributed-commitment-protocol-2pc)
+
+The Checkpoint 2 features (vector clocks, leader election, mutual exclusion) are retained; their documentation has moved further down in this file.
 
 ## How to demonstrate that this repository works
 This section is intentionally first so it can be used as a short live-demo checklist.
@@ -10,7 +17,7 @@ docker compose up --build -d
 docker compose ps
 ```
 
-Expected result: all 9 services are up (`frontend`, `orchestrator`, the 3 backend services, `order_queue`, and the 3 executor replicas).
+Expected result: all 13 services are up — the 9 services from Checkpoint 2 (`frontend`, `orchestrator`, 3 backend services, `order_queue`, 3 executor replicas) **plus** the 3 `books_database` replicas and `payment_service`.
 
 2. Run the reusable Checkpoint 2 verification script.
 
@@ -74,6 +81,79 @@ Expected result: another executor becomes leader after timeout, dequeues the nex
 ```powershell
 docker compose down
 ```
+
+## Replicated database and consistency protocol
+This section covers the first of the two new Checkpoint 3 features: a replicated key-value store for book stock with a documented consistency protocol. The design note is at [docs/consistency-redesign.md](./docs/consistency-redesign.md).
+
+### What it delivers
+- three `books_database` replicas (`books_database_1..3`) running the same image with distinct `REPLICA_ID`s
+- bully-style primary election (reusing the pattern from the executor tier)
+- **synchronous primary-backup replication** — on every `Write` the primary blocks until every live backup has applied the update, so a `Read` from any replica after a successful write returns the same value
+- gRPC interface with `Write`, `Read`, `ReplicateWrite`, `WhoIsPrimary`, the bully RPCs, and the 2PC participant RPCs (`Prepare`/`Commit`/`Abort`); see [utils/pb/books_database/books_database.proto](./utils/pb/books_database/books_database.proto)
+- per-replica state volume (`./books_database/state/{1,2,3}` → `/app/state`) for the on-disk staged-transaction log used by the 2PC participant-recovery bonus
+
+### Diagram
+![Consistency protocol diagram](./docs/diagrams/consistency-protocol.svg)
+
+### How to observe it in the demo
+Convergence check (what the verification script calls): after a successful checkout, `ReadLocal` against each replica must return the same stock value.
+
+```powershell
+docker compose logs --no-color --tail 200 books_database_1 books_database_2 books_database_3
+```
+
+Point out:
+- `became primary` / `new primary is X` — election landed
+- `write_committed primary=X title="Book A" seq=N old=A new=B backups_acked=[...]` — primary synchronously replicated before acking
+- `replicate_applied from_primary=X title="Book A" seq=N old=A new=B` — each backup applied the same `new` value
+- `read_ok title="Book A" value=B` — Read served from the primary
+
+### Why this satisfies the rubric
+- separate database service: ✓ three replicas with a real gRPC interface, not an in-memory mock in the executor
+- consistency protocol chosen and documented: ✓ synchronous primary-backup, explained in [docs/consistency-redesign.md](./docs/consistency-redesign.md)
+- convergence on all replicas: ✓ shown live by `ReadLocal` against each replica returning the same value after a commit
+
+## Distributed commitment protocol (2PC)
+This section covers the second new Checkpoint 3 feature: a two-phase commit coordinator in the leader `order_executor` that atomically reserves book stock in `books_database` **and** the payment in `payment_service`. The design note is at [docs/commitment-protocol.md](./docs/commitment-protocol.md).
+
+### What it delivers
+- 2PC coordinator in [order_executor/src/app.py](./order_executor/src/app.py) (`run_2pc`), running only on the elected executor leader
+- two participants — `books_database` primary (stock reservation) and `payment_service` (payment authorization) — with idempotent `Prepare`/`Commit`/`Abort` handlers on each
+- a decision record: the coordinator logs `2pc_decision=COMMIT|ABORT participants=[db,payment]` **before** sending phase-2 RPCs, so every round leaves a grep-friendly audit point
+- coordinator retry: `Commit` retries with exponential backoff and re-discovers the DB primary between attempts, so a participant that crashed mid-Commit can rejoin and finish the round
+- **Phase-6 bonus (participant persistence + recovery).** The DB participant `write-then-rename`s a `txn_<order>.json` before voting commit, reloads it on startup (`recovered_pending`), and refuses to commit an order it has no record of — so a freshly elected replacement primary during the retry window cannot silently mis-commit. Demonstrated end-to-end by [order_executor/tests/test_2pc_crash_recovery.py](./order_executor/tests/test_2pc_crash_recovery.py) and [order_executor/tests/test_2pc_fail_injection.py](./order_executor/tests/test_2pc_fail_injection.py).
+- **Option C dev flag.** Setting `CP3_EXECUTION_ONLY=true` on the orchestrator (via [docker-compose.cp3-only.yaml](./docker-compose.cp3-only.yaml)) bypasses the CP2 validation pipeline and sends the order straight to 2PC. Useful for iterating on 2PC in isolation; verified by [orchestrator/tests/test_cp3_execution_only.py](./orchestrator/tests/test_cp3_execution_only.py).
+
+### Diagram
+![Commitment protocol diagram](./docs/diagrams/commitment-protocol.svg)
+
+The diagram shows both a COMMIT path (both participants vote commit) and an ABORT path (DB votes abort on insufficient stock).
+
+### How to observe it in the demo
+```powershell
+docker compose logs --no-color --tail 200 order_executor_1 order_executor_2 order_executor_3 books_database_1 books_database_2 books_database_3 payment_service
+```
+
+For a single checkout you should see (on the leader executor and the current DB primary):
+- `[PAYMENT] prepare_vote_commit order=<id> user="..." amount=N.NN`
+- `[DB-X] prepare_vote_commit order=<id> items=[Book Ax1] persisted=yes`
+- `[EXEC-Y] 2pc_votes order=<id> db=(vote_commit=True,msg='ok') payment=(vote_commit=True,msg='ok')`
+- `[EXEC-Y] 2pc_decision order=<id> decision=COMMIT participants=[db,payment]`
+- `[DB-X] commit_applied order=<id> title="Book A" seq=N old=A new=B backups_acked=[...]`
+- `[DB-W] replicate_applied from_primary=X title="Book A" seq=N old=A new=B` (on each backup)
+- `[PAYMENT] commit_applied order=<id> user="..." amount=N.NN`
+- `[EXEC-Y] 2pc_commit_applied order=<id>`
+
+For a deliberate oversell (requesting more stock than exists), the DB votes abort and the log shows:
+- `[DB-X] prepare_vote_abort order=<id> reasons=[...]`
+- `[EXEC-Y] 2pc_decision order=<id> decision=ABORT participants=[db,payment]`
+- `[DB-X] abort_ok|abort_noop order=<id>` and `[PAYMENT] abort_ok|abort_without_prepare order=<id>`
+
+### Why this satisfies the rubric
+- distributed commitment protocol chosen and documented: ✓ 2PC, written up in [docs/commitment-protocol.md](./docs/commitment-protocol.md)
+- full trace visible in logs: ✓ key=value lines across coordinator, DB primary, both DB backups, payment
+- coordinator-failure analysis (bonus): ✓ §§3–5 of [docs/commitment-protocol.md](./docs/commitment-protocol.md)
+- participant persistence + recovery (bonus): ✓ `txn_<order>.json` + `recovered_pending` recovery scan + coordinator retry loop; live demo in the two tests referenced above
 
 ## Checkpoint 2 deliverables in this repo
 This repository contains the implementation and documentation required for Checkpoint 2:
@@ -232,5 +312,9 @@ Prepared input files:
 The required documentation assets are also available in `docs/`:
 - `docs/diagrams/vector-clocks.svg`
 - `docs/diagrams/leader-election.svg`
+- `docs/diagrams/consistency-protocol.svg` (Checkpoint 3)
+- `docs/diagrams/commitment-protocol.svg` (Checkpoint 3)
 - `docs/vector-clock-redesign.md`
+- `docs/consistency-redesign.md` (Checkpoint 3)
+- `docs/commitment-protocol.md` (Checkpoint 3)
 - `docs/README.md`

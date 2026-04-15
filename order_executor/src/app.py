@@ -460,8 +460,18 @@ def run_2pc(order):
             time.sleep(commit_backoffs[min(attempt - 1, len(commit_backoffs) - 1)])
             # Re-discover primary in case of failover.
             new_primary = find_db_primary_addr()
-            if new_primary:
+            if new_primary and new_primary != primary_addr:
+                print(
+                    f"[EXEC-{EXECUTOR_ID}] 2pc_primary_changed "
+                    f"order={order_id} old_primary={primary_addr} "
+                    f"new_primary={new_primary}"
+                )
                 primary_addr = new_primary
+            elif not new_primary:
+                print(
+                    f"[EXEC-{EXECUTOR_ID}] 2pc_primary_unknown "
+                    f"order={order_id} attempt={attempt}"
+                )
 
         try:
             pay_c = _pay_commit(order_id)

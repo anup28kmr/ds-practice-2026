@@ -121,7 +121,14 @@ def _txn_file(order_id):
 
 
 def persist_pending(order_id, items):
-    """Write-then-rename so a crashed write never leaves a half-file."""
+    """Atomically persist a staged transaction before voting commit.
+
+    Write-then-rename: write the full JSON payload to `<file>.tmp`, then
+    `os.replace` it onto the final path. POSIX guarantees replace is
+    atomic, so a crash between the two steps leaves either the old file
+    (no change) or the new file (complete), never a truncated half-file
+    that `load_persisted_all` could misread on recovery.
+    """
     os.makedirs(STATE_DIR, exist_ok=True)
     path = _txn_file(order_id)
     tmp = path + ".tmp"
@@ -131,6 +138,10 @@ def persist_pending(order_id, items):
 
 
 def remove_persisted(order_id):
+    """Drop the on-disk staged-transaction file for `order_id`. Called
+    once Commit (apply + replicate) or Abort has succeeded, because the
+    in-memory state is now authoritative. Missing file is a no-op so
+    recovery and steady-state paths can both call this unconditionally."""
     try:
         os.remove(_txn_file(order_id))
     except FileNotFoundError:
@@ -138,6 +149,11 @@ def remove_persisted(order_id):
 
 
 def load_persisted_all():
+    """Recovery scan: read every `txn_*.json` in STATE_DIR and return the
+    staged items keyed by order_id. Called once at process start before
+    `serve()` accepts RPCs so the replica can rebuild `pending_orders`
+    exactly as the previous instance left it, letting a retrying
+    coordinator's Commit or Abort finish the transaction."""
     if not os.path.isdir(STATE_DIR):
         return {}
     out = {}

@@ -40,6 +40,11 @@ aborted = set()
 class PaymentService(pay_grpc.PaymentServiceServicer):
 
     def Prepare(self, request, context):
+        """Phase 1 of 2PC on the payment side. Stages the order amount in
+        the in-memory `prepared` map and always votes commit (the demo
+        does not simulate card-network rejection). Idempotent: replaying
+        Prepare after a committed/aborted state returns the recorded
+        outcome instead of re-staging."""
         order_id = request.order_id
         with state_lock:
             if order_id in prepared:
@@ -70,6 +75,12 @@ class PaymentService(pay_grpc.PaymentServiceServicer):
         return pay_pb2.PaymentPrepareResponse(vote_commit=True, message="ok")
 
     def Commit(self, request, context):
+        """Phase 2 commit. Moves the order from `prepared` to `committed`
+        and logs the settled amount. Idempotent on retry (second call
+        returns `commit_idempotent`). A Commit that arrives without a
+        matching Prepare is still accepted so a retrying coordinator can
+        make progress; the authoritative decision record lives on the
+        coordinator, not here."""
         order_id = request.order_id
         with state_lock:
             if order_id in committed:
@@ -95,6 +106,10 @@ class PaymentService(pay_grpc.PaymentServiceServicer):
         return pay_pb2.PaymentCommitResponse(success=True, message="ok")
 
     def Abort(self, request, context):
+        """Phase 2 abort. Drops any `prepared` reservation for the order
+        and records it in `aborted`. Idempotent; also tolerates an Abort
+        that arrives before Prepare (logged as `abort_without_prepare`
+        and treated as a success)."""
         order_id = request.order_id
         with state_lock:
             if order_id in aborted:
