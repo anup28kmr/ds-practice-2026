@@ -863,3 +863,265 @@ If the team wants commit `1ed359b` to become a stronger final Checkpoint 3 submi
 This audit section should be treated as the more up-to-date status note for commit `1ed359b`.
 
 The older sections above are still useful because they explain the original design direction, but they no longer describe the repository's later Checkpoint 3 implementation state exactly.
+
+## Audit update for commit `6f00e05`
+This section is a later audit update for commit `6f00e05` (`6f00e05100d7b6919a80070893f374206235fe5f`) on branch `individual-sten-qy-li`.
+
+This audit was done after the fixes from the earlier `1ed359b` audit had already been merged. So this section focuses only on the **remaining** gaps between commit `6f00e05` and a fully clean Checkpoint 3 submission, including bonus-credit readiness.
+
+### Short answer
+Commit `6f00e05` is **much closer** to full Checkpoint 3 readiness than `1ed359b`.
+
+The strongest improvements compared with the earlier audit are:
+
+- the books database now persists committed `kv_store` state to disk, so restarted replicas no longer come back only with `SEED_STOCK`
+- the concurrent-writes test now has real pass/fail assertions plus replica-convergence checks
+- the commitment-protocol document now contains an honesty note that the queue has no ack / requeue mechanism
+- backup replication now uses cached gRPC channels, which makes the concurrent-writes path more stable under load
+
+So the earlier stale-replica-state problem is now closed, and the repository is no longer missing any large Checkpoint 3 implementation block.
+
+### What changed between `1ed359b` and `6f00e05`
+The new commit is mainly a gap-closure pass on top of the earlier Checkpoint 3 implementation.
+
+The most important changes are:
+
+1. **Database restart state fixed**
+   - committed stock is now flushed to `kv_store.json`
+   - startup loads from disk or falls back to `SEED_STOCK`
+   - this closes the earlier problem where a restarted replica could come back with stale stock
+
+2. **Concurrent-writes bonus evidence strengthened**
+   - the code still uses per-key locking
+   - the dedicated concurrent-writes test is now assertive instead of descriptive
+   - the test now checks cross-replica convergence too
+
+3. **Coordinator-failure write-up made more honest**
+   - the document now explicitly says that `Dequeue` is destructive
+   - it also says there is no ack / nack / visibility-timeout mechanism in the queue
+
+4. **Replication path made more robust**
+   - backup replication channels are now reused instead of created fresh on every call
+   - this is especially useful when several writes happen in parallel
+
+### Rubric-style status at `6f00e05`
+#### Base Checkpoint 3 items
+For the six main rubric items, commit `6f00e05` looks covered:
+
+- consistency protocol and database module: covered
+- distributed commitment protocol and new service: covered
+- logging: covered
+- project organization and documentation: covered
+- consistency protocol diagram: covered
+- distributed commitment protocol diagram: covered
+
+So, in rubric terms, the code/documentation side looks like:
+
+- **base subtotal: 10 / 10**
+
+#### Bonus items
+The three clearly identifiable bonus tasks from the Session 10 and Session 11 pages look like this:
+
+- concurrent write handling: covered
+- failing participant recovery: covered
+- coordinator-failure analysis: covered
+
+That gives a likely bonus picture of:
+
+- **bonus subtotal: 2.25 / 3.0**
+
+One more bonus detail is still unclear:
+
+- the main Checkpoint 3 rubric page allows up to 3 bonus points
+- but the source pages we reviewed clearly spell out only 3 concrete bonus tasks
+- so there may be no real 4th task, or it may exist on a child page we did not extract clearly
+
+So the practical reading is:
+
+- the repo looks strong on the 3 clear bonus tasks
+- the last 0.75 points remain uncertain because the existence of a 4th concrete task is not clear from the reviewed pages
+
+### Remaining gaps in commit `6f00e05`
+#### Category A: hard requirements to finish before the evaluation
+##### 1. The required `checkpoint-3` Git tag is still missing
+This is the clearest remaining Checkpoint 3 requirement gap.
+
+The Checkpoint 3 brief explicitly says to create a `checkpoint-3` tag on the repository. At the time of this audit, the remote branch state matched commit `6f00e05`, but the remote repository still did **not** have a `checkpoint-3` tag.
+
+Why this matters:
+
+- this is part of the formal Checkpoint 3 handoff
+- even if the implementation is strong, the submission is still not fully complete without the required tag
+
+##### 2. The evaluation slot still needs to be booked
+This is not a code gap, but it is still part of the course-side Checkpoint 3 process.
+
+Why this matters:
+
+- the course page explicitly says teams must choose their evaluation slot
+- missing this does not weaken the code, but it weakens actual checkpoint readiness
+
+#### Category B: documentation and demo-flow polish
+##### 3. The top README demo guide still points to the Checkpoint 2 script instead of the Checkpoint 3 script
+The root `README.md` is labelled as a Checkpoint 3 document, but the very first demo section still tells the reader to run:
+
+- `scripts/checkpoint2-checks.ps1`
+
+instead of the Checkpoint 3 verification script:
+
+- `scripts/checkpoint3-checks.ps1`
+
+Why this matters:
+
+- the first section of the README is supposed to help the teaching assistants see the Checkpoint 3 functionality quickly
+- the current wording still points them toward a Checkpoint 2 verification path
+- this weakens the demo-readiness and documentation-quality part of the checkpoint
+
+##### 4. The commitment-protocol document is much better now, but one stale sentence still remains
+The document `docs/commitment-protocol.md` now correctly includes an honesty note that the queue has no ack / nack / visibility-timeout mechanism and that `Dequeue` is destructive.
+
+That is a clear improvement.
+
+But later in the same document, the summary still says the system is partially mitigated by:
+
+- `redelivery from order_queue`
+
+This sentence is still not true for the current implementation.
+
+Why this matters:
+
+- the coordinator-failure analysis bonus is mostly a documentation-and-reasoning task
+- the document is now strong overall, but it is still not perfectly internally consistent
+- cleaning up this one sentence would make the analysis more trustworthy
+
+##### 5. The Checkpoint 3 script still contains stale comments from the old restart-state issue
+The code in `books_database/src/app.py` now persists committed stock state properly.
+
+However, `scripts/checkpoint3-checks.ps1` still contains comments that describe the old problem where a restored primary could come back with stale seed values.
+
+Why this matters:
+
+- this is now a documentation/tooling consistency issue, not a code correctness issue
+- it can still confuse the team or the evaluators during final review
+
+#### Category C: optional polish that would make the bonus story stronger
+##### 6. The main Checkpoint 3 verification script still does not cover the concurrent-writes bonus
+The concurrent-writes test is now much stronger than before, which is a real improvement.
+
+But `scripts/checkpoint3-checks.ps1` still does **not** run that concurrent-writes test as part of the main reusable verification flow.
+
+So the repository currently has:
+
+- bonus implementation evidence in a dedicated Python test
+
+but it does not yet have:
+
+- one main Checkpoint 3 verification flow that also proves the concurrent-writes bonus in the same reusable demo script
+
+Why this matters:
+
+- this does not necessarily break the implementation itself
+- but it makes the bonus-credit demo and testing story less complete than it could be
+- for evaluation, it is cleaner if the main script can show the main bonus claim too
+
+##### 7. There is still no explicit automated test just for `kv_store.json` restart persistence
+The code fix for committed stock persistence looks real and important.
+
+But the repository still does not have one small direct test that says:
+
+- write stock
+- restart replica(s)
+- read the post-commit value back
+- confirm startup log shows load-from-disk behavior
+
+Why this matters:
+
+- this is not strictly required by the rubric
+- but it would make the phase-14 fix more directly demonstrable
+
+##### 8. Coordinator failure is analysed well, but not solved operationally
+This is a nuance, not a contradiction.
+
+The course page for the coordinator-failure bonus says:
+
+- analyse the consequences of coordinator failure
+- think of a solution
+- no implementation is needed
+
+So commit `6f00e05` may already be **good enough** to earn this bonus if the teaching assistants accept the analysis quality.
+
+But if the team wants to say that the repository not only analyses coordinator failure, but also handles it robustly in practice, there is still a real gap:
+
+- there is no durable coordinator-side decision log
+- there is no replacement-leader recovery of unfinished decisions
+- there is still no queue ack / redelivery layer
+
+Why this matters:
+
+- for the formal course bonus, this may already be acceptable
+- for a stricter engineering reading, it is still not a fully implemented recovery solution
+
+### What this means for Checkpoint 3 readiness
+#### Base Checkpoint 3
+For the **base** Checkpoint 3 requirements, commit `6f00e05` now looks **complete in implementation terms**.
+
+The remaining base-like gaps are mostly submission and presentation items:
+
+- missing `checkpoint-3` tag
+- evaluation slot not yet booked
+- README demo section still points to the wrong script
+
+#### Bonus-credit readiness
+For the **bonus-credit** side, the picture is stronger than before:
+
+- concurrent-writes bonus: implementation plus dedicated assertive test exist
+- participant-failure bonus: looks strong
+- coordinator-failure bonus: the analysis is strong and much more honest than before
+
+So the remaining bonus gaps are mostly:
+
+- packaging the evidence better
+- removing one documentation contradiction
+- deciding whether it is worth chasing any possible 4th bonus task
+
+### Predicted rubric picture
+If the remaining release-day and documentation items are cleaned up, the likely outcome looks like:
+
+- base: **10 / 10**
+- bonus: **2.25 / 3.0**
+- likely total: **12.25 / 13.0**
+
+That estimate assumes:
+
+- the `checkpoint-3` tag is created
+- the evaluation slot is booked
+- the teaching assistants accept the three clear bonus tasks as completed
+
+If a real 4th bonus task exists and the team wants to pursue it, then the most realistic directions would be:
+
+- durable coordinator decision logging
+- queue ack / redelivery
+- another clearly identifiable advanced protocol extension
+
+### Very short fix-before-submission checklist for commit `6f00e05`
+If the team wants to close the remaining gaps from commit `6f00e05`, the shortest useful checklist is:
+
+1. Create the required `checkpoint-3` tag on the final approved submission commit.
+2. Book the evaluation slot.
+3. Update the first section of `README.md` so it points to `scripts/checkpoint3-checks.ps1` for the Checkpoint 3 demo flow.
+4. Clean up `docs/commitment-protocol.md` so every section consistently says the queue has no redelivery mechanism.
+5. Remove or update the stale comments in `scripts/checkpoint3-checks.ps1` so the script text matches the current fixed database-restart behavior.
+6. Optionally add the concurrent-writes test to the main Checkpoint 3 verification flow.
+7. Optionally add a small direct restart-persistence test for `kv_store.json`.
+
+### Practical conclusion
+Compared with the earlier `1ed359b` audit, commit `6f00e05` appears to have closed the biggest technical gap and strengthened the bonus evidence noticeably.
+
+What remains now is mostly:
+
+- release/tag completeness
+- README/demo polish
+- documentation consistency
+- optional bonus-verification polish
+
+So this is no longer a "big missing implementation" situation. It is now mainly a "finish the release-day details and tighten the presentation" situation.

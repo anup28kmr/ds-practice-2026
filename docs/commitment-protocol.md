@@ -248,12 +248,16 @@ scope for Checkpoint 3; we mention it only for completeness.
 - Coordinator failure in 2PC is the classic blocking problem: a
   participant in `prepared` cannot unilaterally commit or abort, so it
   waits on the coordinator.
-- Our repo partially mitigates this via (a) bully re-election of a new
-  leader executor, (b) redelivery from `order_queue`, and (c)
-  idempotent Prepare/Commit/Abort on both participants. The demo
-  converges to a correct outcome after a coordinator crash without code
-  changes *as long as participants tolerate a second Prepare*, which
-  ours do.
+- Our repo partially mitigates this via (a) bully re-election of a
+  new leader executor and (b) idempotent Prepare/Commit/Abort on both
+  participants. As flagged in the §4.1 honesty note, the `order_queue`
+  itself does **not** redeliver an in-flight order to a new leader —
+  `Dequeue` is destructive with no ack/nack — so recovery in practice
+  depends on either the original leader being restarted quickly enough
+  to finish its retry loop, or the user resubmitting the order. Given
+  that, the demo converges to a correct outcome after a coordinator
+  crash without code changes *as long as participants tolerate a
+  second Prepare*, which ours do.
 - A fully hardened system would additionally (a) persist the decision
   record on the coordinator before phase 2, (b) have the replacement
   leader scan for unfinished decisions and replay phase 2, and/or (c)

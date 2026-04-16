@@ -19,19 +19,19 @@ docker compose ps
 
 Expected result: all 13 services are up — the 9 services from Checkpoint 2 (`frontend`, `orchestrator`, 3 backend services, `order_queue`, 3 executor replicas) **plus** the 3 `books_database` replicas and `payment_service`.
 
-2. Run the reusable Checkpoint 2 verification script.
+2. Run the reusable Checkpoint 3 verification script.
 
 ```powershell
-.\scripts\checkpoint2-checks.ps1
+.\scripts\checkpoint3-checks.ps1
 ```
 
 After the first full build, the quicker rerun is:
 
 ```powershell
-.\scripts\checkpoint2-checks.ps1 -SkipBuild
+.\scripts\checkpoint3-checks.ps1 -SkipBuild
 ```
 
-Expected result: all implementation-based checks pass, including valid checkout, rejection cases, vector-clock log checks, queue/executor checks, and leader failover.
+Expected result: all 18 checks pass — docker/compose availability, compose down/up, orchestrator ready, DB all-reachable, DB primary elected, `py-compile` for all new services, 2PC valid-commit, 2PC oversold-abort, cross-replica read convergence, DB primary failover, and the participant-failure recovery bonus. The Checkpoint 2 features (vector clocks, leader election, mutual exclusion) are exercised as part of the CP3 `/checkout` flow; they also still have a dedicated verifier at [scripts/checkpoint2-checks.ps1](scripts/checkpoint2-checks.ps1) if the TA wants to run it separately.
 
 3. If the teaching assistants want a manual happy-path demo, open the frontend at `http://127.0.0.1:8080` and submit a normal order. The REST API is also available at `http://127.0.0.1:8081`.
 

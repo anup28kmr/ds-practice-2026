@@ -942,3 +942,389 @@ tracking, and/or recording TA feedback:
 | `Golf-Papa-Tango.md` | repo root | Earlier CP3 planning/analysis document (reviewed course pages, listed what needed to change) |
 | `vc_investigation_results.txt` | repo root | TA feedback on Checkpoint 2 vector clocks — grade + feedback quote that prompted the VC redesign |
 
+---
+
+## 16. Rubric audit at commit `6f00e05`
+
+This section records a second audit, run against commit `6f00e05`
+("Close Checkpoint 3 audit gaps (phase 14)", 2026-04-16, branch
+`individual-sten-qy-li`). It supersedes §15 as the current "where do
+we stand" snapshot. Findings from the parallel audit in
+[Golf-Papa-Tango.md](Golf-Papa-Tango.md) "Audit update for commit
+`6f00e05`" that were not in this section's first draft have been
+folded in; those additions are flagged with *(via GPT)* where they
+appear. The rubric sources are the same as in §15:
+
+- main Projects page:
+  <https://courses.cs.ut.ee/2026/ds/spring/Main/Projects>
+- Checkpoint 3 guide (Session 13 / Guide12):
+  <https://courses.cs.ut.ee/2026/ds/spring/Main/Guide12>
+- Session 10 guide (Guide9 — database + consistency):
+  <https://courses.cs.ut.ee/2026/ds/spring/Main/Guide9>
+- Session 11 guide (Guide10 — distributed commitment):
+  <https://courses.cs.ut.ee/2026/ds/spring/Main/Guide10>
+
+### 16.0 Short answer *(via GPT)*
+
+Commit `6f00e05` is **much closer** to full Checkpoint 3 readiness
+than `1ed359b`. The earlier stale-replica-state problem is closed,
+the concurrent-writes test has real assertions and cross-replica
+convergence checks, and the coordinator-failure write-up is now
+honest about the queue having no ack/requeue mechanism. No large
+Checkpoint 3 implementation block is missing. What remains is
+mostly **release/tag completeness** (§16.4 Category A), **README
+and documentation consistency** (§16.4 Category B — three new
+items folded in from the GPT audit) and **optional bonus-evidence
+polish** (§16.4 Category C). Predicted rubric outcome if the
+release-day items get done: **12.25 / 13.0** (see §16.5).
+
+### 16.1 What changed between `1ed359b` and `6f00e05`
+
+`6f00e05` is a single gap-closure commit that sits directly on top of
+`1ed359b`. It closes the three code/documentation gaps the §15 audit
+identified, plus a test-correctness follow-up:
+
+- **Stale stock after DB replica restart** → fixed. `kv_store` is now
+  persisted to `STATE_DIR/kv_store.json` via write-then-rename with a
+  per-thread temp file name (`threading.get_ident()` suffix) to avoid
+  `os.replace` races under concurrent `ReplicateWrite`. Startup loads
+  from disk or falls back to `SEED_STOCK` (`kv_store_loaded from=...`
+  log line). See
+  [books_database/src/app.py](books_database/src/app.py)
+  `persist_kv_store` / `load_kv_store`.
+- **Concurrent-writes strategy documentation** → fixed. Per-key
+  locking is now explained in both [README.md](README.md) (a new
+  "Concurrent writes (bonus)" subsection) and in
+  [docs/consistency-redesign.md](docs/consistency-redesign.md) §7.
+- **Concurrent-writes test quality** → fixed. Rewrote
+  [books_database/tests/test_concurrent_writes.py](books_database/tests/test_concurrent_writes.py)
+  with hard pass/fail assertions, cross-replica convergence checks on
+  every key, and a non-zero exit code on any failure. Both Test A
+  (same-key writes) and Test B (different-key writes) pass.
+- **Queue redelivery honesty note** → added. A blockquote in
+  [docs/commitment-protocol.md](docs/commitment-protocol.md) §4.1 now
+  states explicitly that `Dequeue` is a destructive `popleft()` with
+  no ack/nack/visibility-timeout, so the queue-redelivery claim is
+  unambiguously flagged as described-but-not-implemented.
+
+One incidental fix fell out of the test-strengthening work:
+replication channels to backups are now cached in
+`_replication_channels` (one `grpc.insecure_channel` per peer, reused
+across calls) instead of being created fresh on every replication
+call. Under the new concurrent-writes test this keeps 5 parallel
+fan-outs from opening 10 simultaneous TCP connections and tripping
+over each other.
+
+### 16.2 Base points status at `6f00e05`
+
+All six base items from the §15.1 table are still covered. Nothing in
+Phase 14 regressed any base deliverable; the stale-stock fix is an
+improvement to base #1, and the documentation/test work strengthens
+base #3 (logging — the new `kv_store_loaded` line) and base #4
+(project organization — the honesty note and the expanded phase log).
+
+| # | Requirement | Pts | `6f00e05` status |
+|---|---|---|---|
+| 1 | Consistency protocol & database module | 3 | Covered (improved: committed stock now survives replica restart) |
+| 2 | Distributed commitment protocol & new service | 3 | Covered (unchanged from `1ed359b`) |
+| 3 | Logging | 1 | Covered (one new log line added in Phase 14) |
+| 4 | Project organization & documentation | 1 | Covered (strengthened in Phase 14) |
+| 5 | Consistency Protocol diagram | 1 | Covered (unchanged) |
+| 6 | Commitment Protocol diagram | 1 | Covered (unchanged) |
+
+**Base subtotal: 10 / 10.**
+
+### 16.3 Bonus points status at `6f00e05`
+
+The Guide12 rubric awards **0.75 points per bonus task completed**,
+with a total bonus cap of **3.0 points**. The Guide9 and Guide10
+session pages explicitly enumerate three bonus tasks:
+
+| # | Bonus | Source | Pts | `6f00e05` status |
+|---|---|---|---|---|
+| B1 | Concurrent write handling | Guide9 | 0.75 | **Fully covered.** Per-key locks + docs + assertive test with convergence check. |
+| B2 | Failing-participant recovery | Guide10 | 0.75 | **Fully covered.** On-disk staged-txn persistence, startup recovery, coordinator retry, idempotency tracking, two passing tests. |
+| B3 | Coordinator-failure analysis | Guide10 | 0.75 | **Fully covered.** [docs/commitment-protocol.md](docs/commitment-protocol.md) §§3–5 — crash windows, blocking problem, four literature mitigations, honest labelling of the queue-redelivery gap. |
+
+**Bonus subtotal: 2.25 / 3.0.**
+
+The remaining 0.75 pt gap between 2.25 achieved and the 3.0 cap is
+addressed in §16.4 item 5 below. In short: we could not identify an
+explicit fourth bonus task in the Guide9 / Guide10 content the
+WebFetch audit extracted. Either (a) no fourth task exists and 2.25
+is the maximum any team can score, or (b) a fourth task exists on a
+child page the audit did not pull. The §15.2 B4 row kept this as
+"Unknown" and the audit at `6f00e05` could not conclude otherwise.
+
+### 16.4 Remaining gaps at `6f00e05`
+
+#### Category A — Must-do before demo day (hard requirements)
+
+**Gap 16.4.1 — `checkpoint-3` git tag not created.**
+- **Rubric citation:** Guide12 lists "Git tag: `checkpoint-3`" under
+  the "Code & Repository" deliverables.
+- **Current state:** `git tag -l` on `6f00e05` shows
+  `checkpoint-1`, `checkpoint-2`, `seminar-5`, `stable-v1`,
+  `sten-seminar-7-leader-election`. The `checkpoint-3` tag is **not**
+  present either locally or on `origin`.
+- **Owner / when:** Per §13 of this plan, the tag is Step 3
+  (team-lead's responsibility, placed on the **merge commit on
+  `master`**, not on any commit that lives only on
+  `individual-sten-qy-li`).
+- **Severity:** High. If this tag is missing on demo day, the TA who
+  checks out `checkpoint-3` gets nothing. This is the single most
+  important remaining hard gap.
+
+**Gap 16.4.2 — Branch not yet merged into `master`.**
+- **Rubric citation:** the rubric does not demand `master` specifically,
+  but §13 of this plan (our internal process) requires the
+  `checkpoint-3` tag to live on the merge commit on `master`. Without
+  the merge there is nothing to tag.
+- **Current state:** `master` is still at its pre-CP3 state; all CP3
+  work (Phases 1–14) is on `individual-sten-qy-li`.
+- **Owner / when:** Team lead, release day, before tagging.
+- **Severity:** High. Blocks Gap 16.4.1.
+
+**Gap 16.4.3 — Evaluation slot not booked.**
+- **Rubric citation:** Guide12 — "Team must schedule evaluation slot
+  in provided spreadsheet. Only attend officially registered seminar
+  group time slot."
+- **Current state:** Not yet booked. The spreadsheet link lives in
+  the Session 13 guide.
+- **Owner / when:** Team, before evaluation dates 2026-05-06 /
+  2026-05-08.
+- **Severity:** High. Missing the slot means no evaluation and no
+  points, regardless of code quality.
+
+#### Category B — Demo-day logistics (administrative, not code)
+
+**Gap 16.4.4 — Demo laptop not prepared.**
+- **Rubric citation:** Guide12 — "At least one laptop with functional
+  system", "Codebase and diagrams available for display", "System
+  logs demonstrated showing component interactions".
+- **Current state:** N/A (one-off preparation step).
+- **Needed:** Docker Desktop running; repo checked out at tag
+  `checkpoint-3`; both SVG diagrams open as images; README open at
+  the "How to demonstrate" section; a terminal ready to run
+  `scripts/checkpoint3-checks.ps1` and `docker compose logs`.
+- **Severity:** Medium. Easy to forget; doesn't cost rubric points
+  directly but the 10–15 minute demo window is tight enough that
+  setup friction matters.
+
+**Gap 16.4.5 — 10–15 minute presentation script not rehearsed.**
+- **Rubric citation:** Guide12 — "10–15 minute presentation per
+  group".
+- **Current state:** The README's "How to demonstrate" section plus
+  this plan's §§1–11 give most of the material, but no explicit
+  script is written.
+- **Severity:** Low-to-medium. A bad demo can cost soft points on
+  base #4 ("Project organization, documentation, collaboration").
+
+**Gap 16.4.5a — README demo section still points to the Checkpoint 2
+verification script.** *(via GPT, closed in this commit.)*
+- **Rubric citation:** Guide12 — base #4 "Project organization,
+  documentation, collaboration"; demo requirement "Codebase and
+  diagrams available for display" and "System logs demonstrated
+  showing component interactions".
+- **Current state:** [README.md](README.md) is labelled as a
+  Checkpoint 3 document, but four separate places (lines 25, 31,
+  169, 298 as of `6f00e05`) still instruct the reader to run
+  `scripts/checkpoint2-checks.ps1` rather than
+  `scripts/checkpoint3-checks.ps1`. A TA who follows the README
+  literally exercises the CP2 pipeline and never runs the CP3
+  verification flow.
+- **Fix sketch:** `replace_all` on the README for
+  `checkpoint2-checks.ps1` → `checkpoint3-checks.ps1`, then re-read
+  each hit in context to make sure the surrounding prose still
+  matches (some hits may talk about CP2 historically and should be
+  left alone — a grep-and-replace without review will over-rewrite).
+- **Severity:** Medium. Directly weakens the demo-readiness part of
+  base #4. Quick to fix.
+
+**Gap 16.4.5b — `docs/commitment-protocol.md` summary still claims
+queue redelivery exists.** *(via GPT, closed in this commit.)*
+- **Rubric citation:** Guide10 bonus — coordinator-failure analysis
+  quality.
+- **Current state:** Phase 14 added an honesty note to §4.1
+  explicitly stating `Dequeue` is destructive with no ack/requeue.
+  But §6 "Summary" at line 252 still lists
+  `(b) redelivery from \`order_queue\`` as one of the three
+  mitigations our repo partially provides. §4.1 and §6 are now
+  internally inconsistent.
+- **Fix sketch:** edit line 252 to replace `(b) redelivery from
+  \`order_queue\`` with a phrasing consistent with the §4.1 honesty
+  note — e.g. `(b) idempotent replay if the original coordinator is
+  restarted, since the queue itself does not redeliver` — or simply
+  drop the `(b)` clause and renumber. Fifteen-minute edit.
+- **Severity:** Medium. B3 is a documentation-quality bonus; an
+  internally contradictory document weakens exactly the axis this
+  bonus is scored on. Quick to fix.
+
+**Gap 16.4.5c — `scripts/checkpoint3-checks.ps1` still carries stale
+comments describing the pre-Phase-14 restart problem.** *(via GPT, closed in this commit.)*
+- **Rubric citation:** Guide12 — base #4 "Project organization,
+  documentation, collaboration" (code documentation).
+- **Current state:** Lines 385–388 of the script still say:
+  > Bully tie-breaker (higher replica id wins). The current design
+  > loads only staged/prepared state from disk on restart, so the
+  > recovered replica can bring stale seed values back with it — a
+  > documented consistency-vs-availability tradeoff …
+  > The first write through the restored primary re-synchronises the
+  > [backups]
+  This was accurate against `1ed359b` but is no longer accurate
+  against `6f00e05`: the replica now loads committed `kv_store.json`
+  on startup, so it does not bring stale seed values back with it,
+  and the post-restore write is no longer needed as a
+  re-synchronisation workaround.
+- **Fix sketch:** rewrite the block to either (a) remove the
+  workaround rationale and just keep the bully tie-breaker
+  explanation, or (b) briefly note that Phase 14 made the workaround
+  unnecessary while the follow-up write is retained as an
+  end-to-end sanity check. Ten-minute edit.
+- **Severity:** Low. Does not affect test behaviour or rubric points
+  directly; only confuses a reader of the script.
+
+#### Category C — Optional polish (not required for full rubric marks)
+
+**Gap 16.4.6 — Verification script does not invoke the
+concurrent-writes test.**
+- **Current state:** [scripts/checkpoint3-checks.ps1](scripts/checkpoint3-checks.ps1)
+  runs 18 assertions but does **not** call
+  [books_database/tests/test_concurrent_writes.py](books_database/tests/test_concurrent_writes.py).
+  Grep for `test_concurrent_writes` in the script returns nothing.
+- **Why this is a gap:** the §15.2 B1 entry flagged three weaknesses.
+  Phase 14 fixed two of the three (documentation + test assertions)
+  but not the third (make the test runnable from the main verifier so
+  a TA who just runs the script sees concurrent-write evidence too).
+  The test exists and passes, so a TA who reads the code and runs
+  the test manually still gets full B1 credit; this gap only matters
+  for the "run one script and watch everything pass" narrative.
+- **Fix sketch:** add a `2. [PASS] consistency:concurrent-writes`
+  style check to the script that shells out to
+  `python books_database/tests/test_concurrent_writes.py` from the
+  host, expects exit-code 0, and asserts the output contains
+  `CONCURRENT WRITES TEST: PASSED`. Ten minutes of work.
+- **Severity:** Low. Does not affect rubric points directly as long
+  as the TA is willing to run the test manually.
+
+**Gap 16.4.7 — No explicit fourth bonus task implemented.**
+- **Rubric citation:** Guide12 — "0.75 points each for completing
+  bonus tasks in Consistency Protocols sessions" and "0.75 points
+  each for completing bonus tasks in Commitment Protocols sessions".
+  Total bonus cap is 3.0 pts, implying space for four 0.75-pt tasks.
+- **Current state:** B1–B3 covered for 2.25 pts. We could not
+  identify a fourth bonus task in the Guide9 / Guide10 content
+  extracted by the audit.
+- **Possible fourth-bonus candidates** (if the 0.75 pt is worth
+  chasing):
+  - **Implement 3PC** (Guide10 alternative protocol). Adds a
+    `PreCommit` phase and `pre_committed_orders` state on each
+    participant. Roughly a day of work and requires updating both
+    diagrams and the commitment-protocol doc.
+  - **Durable decision log on the coordinator** (closes the W3/W4 gap
+    analysed in [docs/commitment-protocol.md](docs/commitment-protocol.md)
+    §5.2). Mirror the Phase-6 participant persistence pattern onto
+    the executor: write `/app/executor_state/decision_<order>.json`
+    before phase 2, scan on leader promotion, resume phase 2 from the
+    record. Roughly half a day of work, reuses infra we already have.
+  - **Queue ack / visibility-timeout** (closes the B3 caveat and
+    makes the coordinator-failure story actually work end to end).
+    Add `AckOrder(order_id)` to
+    [order_queue/src/app.py](order_queue/src/app.py) and track
+    in-flight orders with a visibility timeout so a crashed leader's
+    order is re-offered to a new leader. Half a day of work.
+- **Severity:** Low. 2.25 / 3.0 bonus is already a strong result.
+  Only pursue a fourth bonus if schedule allows and if the team can
+  confirm with the TA that a fourth task actually exists in the
+  rubric.
+
+**Gap 16.4.8 — `kv_store.json` persisted files are not covered by
+the Phase-6 recovery tests.**
+- **Current state:** Phase 6 tests
+  ([order_executor/tests/test_2pc_fail_injection.py](order_executor/tests/test_2pc_fail_injection.py),
+  [order_executor/tests/test_2pc_crash_recovery.py](order_executor/tests/test_2pc_crash_recovery.py))
+  exercise staged-txn recovery via `txn_<order>.json`, but the new
+  `kv_store.json` persistence from Phase 14 does not have its own
+  dedicated assertion in the verification script or the test suite.
+  The concurrent-writes test indirectly exercises it by forcing a
+  write-then-restart cycle in the stack, but there is no explicit
+  "restart replica, read back post-commit value" assertion.
+- **Fix sketch:** add a small test (or a step in the checkpoint3
+  script) that writes a value via the primary, restarts all three
+  replicas, then asserts `ReadLocal` on each still returns the
+  post-commit value and the startup log shows `kv_store_loaded
+  from=disk`.
+- **Severity:** Low. The manual verification in Phase 14's
+  commit message confirmed the fix works end to end; automating it
+  would be defensive but is not strictly required by the rubric.
+
+### 16.5 Verdict for commit `6f00e05`
+
+**Code-space completion: ~100% of what the rubric scores.** All ten
+base points and all three enumerated bonus tasks (B1–B3) are covered.
+The only remaining code-space items are polish (16.4.6, 16.4.8) and a
+speculative fourth bonus (16.4.7) whose existence we could not confirm.
+
+**Non-code-space completion: blocked on release-day work.** The
+`checkpoint-3` git tag does not exist (16.4.1), the branch is not
+merged into `master` (16.4.2), and the evaluation slot is not booked
+(16.4.3). These are §13 Step-3 items, owned by the team lead.
+
+**Predicted rubric score, assuming 16.4.1–16.4.3 get done on release
+day:**
+- Base: 10 / 10
+- Bonus: 2.25 / 3.0 (unless a fourth bonus is implemented)
+- **Total: 12.25 / 13.0**
+
+**Predicted rubric score, assuming 16.4.1–16.4.3 are NOT done:**
+- Demo fails (no `checkpoint-3` tag to check out; no booked
+  evaluation slot) → evaluation does not happen → score is effectively
+  zero regardless of code quality.
+
+The risk concentration is therefore entirely on release-day
+administrative work, not on anything in the code.
+
+### 16.6 Fix-before-submission checklist *(via GPT)*
+
+A consolidated, ordered to-do list covering every gap in §16.4. Items
+1–3 are hard blockers; items 4–6 are documentation-consistency fixes
+that cost very little time and tighten base #4 plus the B3 narrative;
+items 7–9 are optional polish.
+
+1. Create the `checkpoint-3` Git tag on the final approved
+   submission commit on `master` after §13 Step 3 (blocker —
+   §16.4.1).
+2. Merge `individual-sten-qy-li` into `master` so there is a merge
+   commit to tag (blocker — §16.4.2).
+3. Book the evaluation slot in the Google Sheet linked from the
+   Session 13 guide (blocker — §16.4.3).
+4. ~~Update [README.md](README.md) so every reference to
+   `scripts/checkpoint2-checks.ps1` in CP3 demo instructions points
+   to `scripts/checkpoint3-checks.ps1` instead (§16.4.5a).~~ **Done in this commit.**
+5. ~~Fix the line-252 summary in
+   [docs/commitment-protocol.md](docs/commitment-protocol.md) so it
+   is consistent with the §4.1 honesty note about queue redelivery
+   (§16.4.5b).~~ **Done in this commit.**
+6. ~~Rewrite the lines-385–388 stale-seed comment block in
+   [scripts/checkpoint3-checks.ps1](scripts/checkpoint3-checks.ps1)
+   to reflect the Phase-14 `kv_store.json` persistence (§16.4.5c).~~ **Done in this commit.**
+7. *(Optional)* Add a `consistency:concurrent-writes` check to
+   [scripts/checkpoint3-checks.ps1](scripts/checkpoint3-checks.ps1)
+   that shells out to
+   [books_database/tests/test_concurrent_writes.py](books_database/tests/test_concurrent_writes.py)
+   and asserts the output contains `CONCURRENT WRITES TEST: PASSED`
+   (§16.4.6).
+8. *(Optional)* Add a direct `kv_store.json` restart-persistence test
+   (write → restart all three replicas → assert `ReadLocal` returns
+   the post-commit value on each + startup log shows
+   `kv_store_loaded from=disk`) (§16.4.8).
+9. *(Optional, stretch)* Implement a fourth bonus task (candidates:
+   durable coordinator decision log, queue ack/visibility-timeout,
+   or 3PC) if the team wants to chase the last 0.75 pt and can
+   confirm with the TA that a fourth bonus actually exists
+   (§16.4.7).
+
+Items 1–6 together are ~90 minutes of work. Items 7–8 are another
+60–90 minutes. Item 9 is a half-day to full-day commitment depending
+on which candidate is picked.
+

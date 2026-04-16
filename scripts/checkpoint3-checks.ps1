@@ -382,13 +382,13 @@ function Test-DbPrimaryFailover {
     }
 
     # After the former primary is restored it reclaims the role via the
-    # Bully tie-breaker (higher replica id wins). The current design loads
-    # only staged/prepared state from disk on restart, so the recovered
-    # replica can bring stale seed values back with it — a documented
-    # consistency-vs-availability tradeoff (see docs/consistency-redesign.md).
-    # The first write through the restored primary re-synchronises the
-    # backups via ReplicateWrite, so we drive one checkout and then verify
-    # all three replicas converge on the same value.
+    # Bully tie-breaker (higher replica id wins). Phase 14 added
+    # kv_store.json persistence (write-then-rename in STATE_DIR), so a
+    # restarted replica now loads committed stock from disk instead of
+    # reverting to SEED_STOCK. We still drive one checkout and verify
+    # all three replicas converge on the same value — an end-to-end
+    # sanity check that the re-elected primary can still serve 2PC
+    # after a failover+restore cycle.
     Start-Sleep -Seconds 6
     $response = Invoke-Checkout -FilePath "test_checkout.json"
     $orderId = ([string]$response.Json.orderId).Trim()
