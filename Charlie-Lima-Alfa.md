@@ -1328,3 +1328,125 @@ Items 1–6 together are ~90 minutes of work. Items 7–8 are another
 60–90 minutes. Item 9 is a half-day to full-day commitment depending
 on which candidate is picked.
 
+## 17. Audit of commit `2c42158`
+
+This section records the review of three peer-review findings raised
+against commit `2c42158` (the "audit + doc-consistency" commit that
+closed §16.4.5a/b/c). Each finding was checked directly against the
+files in the tree at `2c42158`; conclusions below are independent of
+the reporter's framing.
+
+### 17.1 Finding 1 — commitment-protocol.md still contradicts itself (Medium)
+
+**Reporter's claim.** The §4.1 honesty note says the queue does **not**
+redeliver in-flight orders (because `Dequeue` is a destructive
+`popleft()` with no ack/nack), but §4.2 and the §4.2 closing paragraph
+still describe the replacement leader as if queue redelivery did work.
+
+**Verification.** Confirmed, and worse than reported. Two separate
+contradictions remain in §4.2 of
+[docs/commitment-protocol.md](docs/commitment-protocol.md):
+
+- **Line 152:** "Will re-dequeue the order (because the previous leader
+  never sent `OrderDone` to the queue) and re-run `run_2pc` from
+  scratch." This directly contradicts the honesty note, which says the
+  replacement leader never sees the order again unless the original
+  leader restarts or the user resubmits.
+- **Line 178:** The "honest summary" paragraph credits correct
+  convergence to *"participant idempotency + bully re-election + the
+  queue's redelivery semantics"*. The queue has no redelivery
+  semantics, so this bullet is false.
+
+Commit `2c42158`'s fix for §16.4.5b only patched the top-level §6
+Summary (the one-sentence version). The §4.2 body paragraphs — which
+are what an evaluator reading the coordinator-failure analysis end-to-
+end will actually rely on — were missed.
+
+**Conclusion.** Agree. The `6f00e05` audit under-scoped gap 16.4.5b:
+the fix should have covered every paragraph that implied queue
+redelivery, not only the final summary. This is now tracked as **Gap
+17.1** and will be closed in the same commit that archives this
+section.
+
+**Severity.** Medium. The coordinator-failure analysis bonus (Guide10
+§5.4) is a documentation-quality bonus; an internally inconsistent
+document is exactly what this bonus penalises.
+
+### 17.2 Finding 2 — "no persistent database yet" in CP2 known-limitations (Low)
+
+**Reporter's claim.** [README.md](README.md) line 291 ("there is no
+persistent database yet") is no longer true after the Phase-14
+`kv_store.json` work.
+
+**Verification.** The statement sits under the "Checkpoint 2
+deliverables in this repo" header (line 162) and in-context is
+historically accurate for the CP2 snapshot. However, the root
+`README.md` is now a combined CP2+CP3 document, and the "Known
+limitations" heading is generic enough that a TA skim-reading the
+document in evaluation mode would reasonably take it as current state.
+
+**Conclusion.** Partially agree. The claim is technically scoped to
+the CP2 section, but the boundary is invisible to a casual reader. A
+one-line clarifier (e.g. "the books database persists committed stock
+to `kv_store.json` as of CP3; the CP2 caches and queue remain
+process-local memory only") would close the ambiguity without
+rewriting the CP2 section wholesale.
+
+**Severity.** Low. Polish item. Does not affect any rubric bullet
+directly.
+
+### 17.3 Finding 3 — checkpoint3-checks.ps1 doesn't exercise concurrent-writes bonus (Low)
+
+**Reporter's claim.** The main CP3 verification script only wires in
+the participant-failure recovery bonus
+([scripts/checkpoint3-checks.ps1:491-494](scripts/checkpoint3-checks.ps1#L491-L494));
+the concurrent-writes bonus is covered only by the standalone
+[books_database/tests/test_concurrent_writes.py](books_database/tests/test_concurrent_writes.py).
+
+**Verification.** Confirmed. A full-file search of
+`scripts/checkpoint3-checks.ps1` returns **zero** hits for
+`concurrent` or `test_concurrent_writes`. Only
+`Test-ParticipantFailureBonus` is invoked from the bonus section.
+
+**Conclusion.** Agree, and already captured as §16.4.6 in the earlier
+audit. The concurrent-writes bonus is not a missing-implementation
+gap — the code, per-key locks, and dedicated assertive test all
+exist. What is missing is the "one-script TA demo" path that rolls
+the dedicated test into the same verification flow as the other CP3
+bonus evidence.
+
+**Severity.** Low. Optional polish. Closing it strengthens the demo
+story; not closing it does not weaken any rubric bullet.
+
+### 17.4 Updated action list
+
+Items carried over from §16.6 plus the new Finding 1 item:
+
+1. ~~**Gap 17.1 (Medium).** Rewrite
+   [docs/commitment-protocol.md](docs/commitment-protocol.md) §4.2 so
+   line 152 and line 178 no longer imply queue redelivery. The
+   replacement leader cannot "re-dequeue" the order; correct wording
+   is that redelivery depends on the original leader restarting or
+   the user resubmitting.~~ **Done in the same commit that added
+   this §17.** §4.1 honesty note, §4.2 body, §4.2 closing paragraph,
+   and §6 Summary now tell one consistent story.
+2. ~~*(Low.)* Add the CP3 clarifier to the CP2 known-limitations list
+   in [README.md](README.md) (Finding 17.2).~~ **Done in the same
+   commit as item 1.** The CP2 "Known limitations" list now opens
+   with an explicit "this list describes the state of the repo at
+   the Checkpoint 2 snapshot" clarifier and points the reader to the
+   earlier CP3 section, with a follow-up bullet noting that
+   `kv_store.json` persistence was added in CP3.
+3. ~~*(Low.)* Add a `bonus:concurrent-writes` check to
+   [scripts/checkpoint3-checks.ps1](scripts/checkpoint3-checks.ps1)
+   that shells out to
+   [books_database/tests/test_concurrent_writes.py](books_database/tests/test_concurrent_writes.py)
+   (Finding 17.3, identical to §16.4.6).~~ **Done in the same commit
+   as item 1.** New `Test-ConcurrentWritesBonus` helper added
+   alongside `Test-ParticipantFailureBonus`, invoked in the
+   `-SkipBonus` guarded section, reports as check name
+   `bonus:concurrent-writes`. Since this also closes §16.4.6,
+   §16.6 item 7 is now Done as well.
+4. All three §16.4 Category A blockers (`checkpoint-3` tag, merge to
+   `master`, book the evaluation slot) remain unchanged.
+

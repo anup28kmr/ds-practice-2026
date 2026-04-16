@@ -289,8 +289,9 @@ The following diagram shows the end-to-end flow of an order through the system:
 - the clear broadcast uses the merged final vector clock so services do not clear too early
 
 ### Known limitations
-- there is no persistent database yet
-- the queue and service caches are process-local memory only
+- this list describes the state of the repo **at the Checkpoint 2 snapshot**; the CP3 work below introduces a replicated, partially persistent books database — see "Checkpoint 3 deliverables" earlier in this document
+- at the CP2 snapshot there was no persistent database; CP3 adds `kv_store.json` write-then-rename persistence for committed stock on each `books_database` replica
+- the queue and vector-clock service caches remain process-local memory only (both in CP2 and in CP3)
 - the frontend and orchestrator are single-instance services
 - retries and network partitions are not handled beyond the simple crash-stop assumptions needed for this checkpoint
 

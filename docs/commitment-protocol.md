@@ -149,8 +149,13 @@ The executor leader holds the 2PC decision only in **stdout** (the
 the leader dies in W3 or W4, the replacement leader elected by bully:
 
 1. Does not read any decision record, because none is persisted.
-2. Will re-dequeue the order (because the previous leader never sent
-   `OrderDone` to the queue) and re-run `run_2pc` from scratch.
+2. Does **not** automatically pick up the in-flight order, because
+   `Dequeue` already removed it from the queue and there is no ack /
+   requeue mechanism (see the §4.1 honesty note). The order is
+   therefore either (a) re-offered when the original leader restarts
+   within its retry window, or (b) resubmitted by the user. Either way,
+   the replacement path re-enters `run_2pc` from scratch for that
+   order.
 3. On the re-run, `Prepare` to `books_database` is **idempotent** (the
    order_id is already in `pending_orders` or in `committed_orders`),
    and `Prepare` to `payment_service` is idempotent (`prepared[order]`
@@ -163,20 +168,23 @@ the leader dies in W3 or W4, the replacement leader elected by bully:
 So in practice, **the replacement coordinator in our system lands on the
 correct outcome by retrying Phase 1 and relying on participant
 idempotency**, *as long as the original coordinator got at least one
-participant to commit*. The blocking case our code does not resolve is
-W4 where `books_database` committed but `payment_service` is still
-prepared and the original decision was COMMIT: the new leader will
-re-Prepare, `payment_service` will re-vote commit, the new leader will
-re-decide, and eventually Commit will reach `payment_service`. That is
-correct, but it only works because the demo participants are
+participant to commit and the order re-enters `run_2pc` via a leader
+restart or a user resubmit*. The blocking case our code does not
+resolve is W4 where `books_database` committed but `payment_service`
+is still prepared and the original decision was COMMIT: once the order
+re-enters `run_2pc`, the new leader will re-Prepare,
+`payment_service` will re-vote commit, the new leader will re-decide,
+and eventually Commit will reach `payment_service`. That is correct,
+but it only works because the demo participants are
 idempotent-by-design and the payment side has no real money at stake.
 A participant that cannot safely accept a second Prepare after its first
 Commit would not be saved by this scheme.
 
 The honest summary: our system handles coordinator failure *in the
-demo-happy cases* through participant idempotency + bully re-election +
-the queue's redelivery semantics, not through a true decision-record
-recovery protocol.
+demo-happy cases* through participant idempotency + bully re-election
++ leader-restart-or-user-resubmit as the redelivery trigger (the
+queue itself does **not** redeliver, per §4.1), not through a true
+decision-record recovery protocol.
 
 ## 5. Mitigations from the literature (what a hardened system would add)
 

@@ -424,6 +424,25 @@ function Test-ParticipantFailureBonus {
     $script:CurrentFailureList = $null
 }
 
+function Test-ConcurrentWritesBonus {
+    # Runs the standalone Python test which fires 5 concurrent Write RPCs on
+    # the same key and then 5 on different keys, asserts no torn state, and
+    # asserts all 3 replicas converge on every key. Exit code is
+    # authoritative; stdout must also contain the "CONCURRENT WRITES TEST:
+    # PASSED" banner as a belt-and-braces signal.
+    $failures = [System.Collections.Generic.List[string]]::new()
+    $script:CurrentFailureList = $failures
+    $out = & python "books_database/tests/test_concurrent_writes.py" 2>&1
+    $ec = $LASTEXITCODE
+    $outText = $out | Out-String
+    Assert-Condition ($ec -eq 0) "concurrent-writes test exit=$ec output=$outText"
+    Assert-Condition ($outText -match "CONCURRENT WRITES TEST: PASSED") "concurrent-writes banner missing; output=$outText"
+    $passed = $failures.Count -eq 0
+    $details = if ($passed) { "per-key locks serialized 5 same-key writes, fanned out 5 different-key writes, and all 3 replicas converged on every key." } else { ($failures -join " ") }
+    Add-CheckResult -Name "bonus:concurrent-writes" -Passed $passed -Details $details
+    $script:CurrentFailureList = $null
+}
+
 Write-Section "Environment"
 
 $dockerVersion = & docker --version
@@ -491,6 +510,9 @@ if (-not $SkipFailover) {
 if (-not $SkipBonus) {
     Write-Section "Bonus: participant-failure recovery"
     Test-ParticipantFailureBonus
+
+    Write-Section "Bonus: concurrent writes"
+    Test-ConcurrentWritesBonus
 }
 
 Write-Section "Summary"
