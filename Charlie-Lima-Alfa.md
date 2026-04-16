@@ -1450,3 +1450,119 @@ Items carried over from §16.6 plus the new Finding 1 item:
 4. All three §16.4 Category A blockers (`checkpoint-3` tag, merge to
    `master`, book the evaluation slot) remain unchanged.
 
+## 18. Audit of commit `daf4812`
+
+This section records the review of two peer-review findings raised
+against commit `daf4812` (the commit that closed the §17 audit
+findings) and the concrete fixes applied in the same commit that
+introduces this section. Peer review re-numbers the two remaining
+items "Finding 2" and "Finding 3" to keep continuity with the §17
+discussion — there was no "Finding 1" because the §17 Finding 1 was
+already closed by `daf4812`.
+
+### 18.1 Finding 18.2 — concurrent-writes bonus can race against a post-failover leader transition (Medium)
+
+**Reporter's claim.** The standalone
+[books_database/tests/test_concurrent_writes.py](books_database/tests/test_concurrent_writes.py)
+passes when run in isolation, but when the full
+[scripts/checkpoint3-checks.ps1](scripts/checkpoint3-checks.ps1) flow
+runs it immediately after `Test-DbPrimaryFailover` + the restore
+sleep, the test can find `DB-3` as the primary address via
+`WhoIsPrimary` on a peer replica, and then hit the actual DB-3 with
+`Read`/`Write` RPCs that reject with `not primary; primary=None`. The
+root cause is a brief leader-stabilization window after restore: one
+peer replica still remembers `leader_id=3` from a prior `Coordinator`
+announcement while DB-3 itself has already cleared its local
+`leader_id` (e.g. inside the `start_election` re-entry at
+[books_database/src/app.py:292-295](books_database/src/app.py#L292-L295)).
+
+**Verification.** The race path is plausible from the code. The
+helper `find_primary()` at
+[books_database/tests/test_concurrent_writes.py:30-43](books_database/tests/test_concurrent_writes.py#L30-L43)
+accepts the first non-zero `leader_id` from any replica's
+`WhoIsPrimary` and immediately fires `Write` RPCs at the named node —
+no majority check, no live-probe, no stability window. Any asymmetry
+between "peer still has leader_id=X in memory" and "X itself has
+cleared its leader state" becomes exactly the observed failure mode.
+The audit's specific reproduction signature (`primary=None` on the
+named leader) is unusual but a valid derivative of this gap.
+
+**Severity.** Medium. Algorithm side is fine; demo-flow reliability
+is the axis at risk. Because the main `scripts/checkpoint3-checks.ps1`
+is the TA-facing one-script demo, a flaky bonus check inside it
+weakens base #4 (project organization / demo-readiness) and the
+concurrent-writes bonus narrative together.
+
+**Conclusion.** Agree on the direction of the fix. I cannot fully
+derive the specific `primary=None` signature from code alone (a live
+leader should have set `is_leader=True` before announcing), so part of
+this confidence rests on the auditor's empirical observation. But the
+defensive gate the audit proposes is good engineering regardless of
+the exact race, and the cost is low. Tracked as **Gap 18.2** and
+closed in the same commit that archives this section.
+
+**Deviation from the audit's proposed fix.** The audit proposes
+hardening the PowerShell script with a readiness gate before invoking
+the Python test. I implement the gate inside `find_primary()` in the
+test itself instead, for three reasons:
+
+1. It also hardens standalone runs of the Python test, not only the
+   one-script path.
+2. The Python side already has direct access to the gRPC stubs and
+   the `Read` RPC semantics, so the gate is ~30 lines of Python
+   rather than a parallel PowerShell re-implementation.
+3. A single implementation means there is one place to reason about
+   the correctness of the readiness rule.
+
+The gate requires **three** conditions simultaneously, repeated for
+**three** consecutive checks spaced ~1s apart, with a 30s overall
+deadline:
+
+- at least **2 of 3 replicas** agree on the same `leader_id` via
+  `WhoIsPrimary` (majority),
+- a real primary-only `Read` against the named leader returns
+  `success=True` (live probe — this is the only condition that
+  actually exercises the `if not is_leader: reject` branch at
+  [books_database/src/app.py:413-415](books_database/src/app.py#L413-L415)),
+- the same `leader_id` holds across three consecutive iterations
+  (stability window).
+
+This matches the audit's "2 or 3 consecutive checks" recommendation
+and strengthens it with the live-probe condition.
+
+### 18.2 Finding 18.3 — README step 2 check count and bonus list are stale (Low)
+
+**Reporter's claim.** [README.md:34](README.md#L34) still says "all
+18 checks pass ... and the participant-failure recovery bonus", but
+the script now emits 19 checks (the new `bonus:concurrent-writes`
+added in `daf4812`) and covers two bonuses.
+
+**Verification.** Counted the `Add-CheckResult` sites in
+[scripts/checkpoint3-checks.ps1](scripts/checkpoint3-checks.ps1):
+9 environment/startup + 4 `py-compile` + 3 (2PC valid + oversold +
+convergence) + 1 db-failover + 1 bonus:participant-failure-recovery +
+1 bonus:concurrent-writes = **19**. README is off by one and names
+only one of the two bonuses.
+
+**Severity.** Low. Pure documentation mismatch. Fixed in the same
+commit that archives this section, alongside Gap 18.2.
+
+**Conclusion.** Agree. Fixed by rewriting the expected-result
+sentence in README step 2 to say "all 19 checks pass", add the
+concurrent-writes bonus to the named bonuses, and otherwise preserve
+the short "memory jogger" shape the audit asks to keep.
+
+### 18.3 Updated action list
+
+1. ~~**Gap 18.2 (Medium).** Harden
+   [test_concurrent_writes.py](books_database/tests/test_concurrent_writes.py)
+   `find_primary()` with majority WhoIsPrimary + live Read probe +
+   3-consecutive-check stability window, ~30s deadline.~~ **Done in
+   the same commit that added this §18.**
+2. ~~**Gap 18.3 (Low).** Fix [README.md:34](README.md#L34) step-2
+   expected-result sentence so the check count matches the current
+   script (19) and both bonus tests are named.~~ **Done in the same
+   commit as item 1.**
+3. All three §16.4 Category A blockers (`checkpoint-3` tag, merge to
+   `master`, book the evaluation slot) remain unchanged.
+

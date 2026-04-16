@@ -28,19 +28,90 @@ PRIMARY_CANDIDATES = [
 
 
 def find_primary():
-    """Ask any replica who the primary is and return its host-side address."""
-    # Map replica_id -> host_addr
+    """Return (host_addr, leader_id) for the current primary.
+
+    Hardened against the brief leader-stabilization window that can
+    appear right after a failover/restore cycle. The naive "first peer
+    that reports any leader_id wins" approach can point Writes at a
+    replica whose own is_leader has already flipped back to False,
+    yielding `not primary; primary=None` rejections. To avoid that we
+    require all three of the following, for three consecutive
+    iterations spaced ~1s apart, within a 30s deadline:
+
+      (a) at least 2 of 3 replicas agree on the same leader_id via
+          WhoIsPrimary,
+      (b) a primary-only Read RPC against the named leader succeeds
+          (this is the only check that actually exercises the
+          `if not is_leader: reject` branch on the named node), and
+      (c) the named leader_id is the same as the one returned by the
+          previous iteration.
+    """
     id_to_host = {rid: addr for addr, rid in PRIMARY_CANDIDATES}
-    for addr, _ in PRIMARY_CANDIDATES:
-        try:
-            with grpc.insecure_channel(addr) as ch:
-                stub = db_grpc.BooksDatabaseServiceStub(ch)
-                r = stub.WhoIsPrimary(db_pb2.WhoIsPrimaryRequest(), timeout=2.0)
-                if r.leader_id:
-                    return id_to_host[r.leader_id], r.leader_id
-        except Exception:
-            continue
-    raise RuntimeError("no primary found")
+    required_stable = 3
+    deadline = time.time() + 30.0
+    last_answer = None
+    streak = 0
+
+    while time.time() < deadline:
+        votes = {}
+        for addr, _ in PRIMARY_CANDIDATES:
+            try:
+                with grpc.insecure_channel(addr) as ch:
+                    stub = db_grpc.BooksDatabaseServiceStub(ch)
+                    r = stub.WhoIsPrimary(
+                        db_pb2.WhoIsPrimaryRequest(), timeout=2.0
+                    )
+                    if r.leader_id:
+                        votes[r.leader_id] = votes.get(r.leader_id, 0) + 1
+            except Exception:
+                continue
+
+        candidate_id = None
+        if votes:
+            # Pick the candidate with the most votes; tie-break on the
+            # higher leader_id to match the bully protocol's rule.
+            candidate_id, candidate_votes = sorted(
+                votes.items(), key=lambda kv: (kv[1], kv[0]), reverse=True
+            )[0]
+            if candidate_votes < 2:
+                candidate_id = None
+
+        probe_ok = False
+        if candidate_id is not None:
+            addr = id_to_host[candidate_id]
+            try:
+                with grpc.insecure_channel(addr) as ch:
+                    stub = db_grpc.BooksDatabaseServiceStub(ch)
+                    probe = stub.Read(
+                        db_pb2.ReadRequest(title="Book A"), timeout=2.0
+                    )
+                probe_ok = bool(probe.success)
+            except Exception:
+                probe_ok = False
+
+        if candidate_id is not None and probe_ok:
+            if candidate_id == last_answer:
+                streak += 1
+            else:
+                last_answer = candidate_id
+                streak = 1
+
+            if streak >= required_stable:
+                print(
+                    f"find_primary stable: leader_id={candidate_id} "
+                    f"votes={votes} streak={streak}"
+                )
+                return id_to_host[candidate_id], candidate_id
+        else:
+            last_answer = None
+            streak = 0
+
+        time.sleep(1.0)
+
+    raise RuntimeError(
+        f"no stable DB primary within 30s "
+        f"(last_answer={last_answer}, streak={streak})"
+    )
 
 
 def write_one(addr, title, quantity, results, idx, barrier):

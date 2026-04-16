@@ -210,7 +210,7 @@ The repo plan should therefore end with these final steps:
 
 - verify Docker Compose startup one last time
 - commit the final implementation, tests, docs, and diagrams
-- create the `checkpoint-3` tag on that final commit
+- after team lead peer review and merge into `master`, the team lead should create the `checkpoint-3` tag on that final approved commit
 
 ## Recommended implementation direction
 ### Recommendation: use a simple design first
@@ -1125,3 +1125,166 @@ What remains now is mostly:
 - optional bonus-verification polish
 
 So this is no longer a "big missing implementation" situation. It is now mainly a "finish the release-day details and tighten the presentation" situation.
+
+## Commit `daf4812` audit results
+This section records the later audit of commit `daf4812` (`daf4812467734c411c8bbf460b65998adf2f7a7b`) on branch `individual-sten-qy-li`.
+
+The team plans to handle the final `checkpoint-3` tag only after team lead peer review and merge into `master`, so this section focuses only on the two remaining **repository-side** findings that still matter before final submission quality is reached.
+
+### Short answer
+Commit `daf4812` is strong enough to be sent to the team lead for human peer review.
+
+The earlier `2c42158` documentation gaps were closed in this commit:
+
+- the coordinator-failure write-up is now internally consistent
+- the CP2 README limitation text is now properly scoped
+- the main Checkpoint 3 script now includes the concurrent-writes bonus test
+
+However, two smaller gaps still remain:
+
+- the concurrent-writes bonus is implemented, but the **full reusable CP3 verifier** can still fail it after the DB failover / restore path
+- the top README demo text is now slightly out of date, because it still describes the older check count and bonus list
+
+### Finding 2: concurrent-writes bonus can still fail inside the full CP3 verifier
+This is the more important of the two remaining repo-side findings.
+
+The dedicated concurrent-writes test itself is real and useful:
+
+- it passes when run by itself
+- it checks same-key serialization
+- it checks different-key parallel writes
+- it checks replica convergence too
+
+So the per-key-lock design is not the main problem.
+
+The remaining problem is that the **main Checkpoint 3 script** now runs that test immediately after the DB primary failover / restore flow. In that sequence, the restored DB can briefly be in an unstable election state.
+
+What the audit observed:
+
+- the script first completed the DB failover step successfully
+- then the concurrent-writes step found `DB-3` as the primary address
+- but the same replica still replied to `Read` / `Write` with `not primary; primary=None`
+
+That means the most likely remaining issue is a short **leader-stabilization race** after restore, not a broken concurrent-writes algorithm.
+
+### Most reliable way to reproduce Finding 2
+The most reliable way is **not** to run the standalone Python bonus test by itself.
+
+That standalone test often passes, because by then the DB election has already settled.
+
+The most reliable reproduction path is to run the **full reusable Checkpoint 3 verifier**, because it includes the failover / restore sequence that exposes the race:
+
+```powershell
+.\scripts\checkpoint3-checks.ps1 -SkipBuild
+```
+
+Why this is the best reproducer:
+
+- it tears the stack down and starts it again
+- it runs the DB failover test
+- it restores the old primary
+- it then continues into the concurrent-writes bonus inside the same end-to-end flow
+
+If the race appears, the clearest failure signature is:
+
+- the script prints `bonus:concurrent-writes`
+- the test prints `primary = DB-3 @ 127.0.0.1:50060`
+- then multiple `Read` / `Write` operations fail with `not primary; primary=None`
+
+This reproduction path is better than:
+
+- `python books_database/tests/test_concurrent_writes.py`
+
+because that standalone command usually runs after the system is already stable again.
+
+### What this means technically
+At commit `daf4812`, the concurrent-writes bonus is in a mixed state:
+
+- **algorithm side:** looks good
+- **standalone proof:** looks good
+- **main reusable demo flow:** still not fully reliable
+
+So this is now more of a **demo-stability and orchestration** gap than a core implementation gap.
+
+### Finding 3: the top README demo text is now slightly outdated
+The root `README.md` is much better than before, but one small mismatch remains.
+
+The first demo section still says:
+
+- the script should produce **18 checks**
+- and it names the participant-failure bonus only
+
+But the script now includes the concurrent-writes bonus too, so the first-section wording no longer matches the current verification flow exactly.
+
+Why this matters:
+
+- this is the first section the teaching assistants are likely to read
+- it is supposed to be the fastest memory-jogger for the live demo
+- if the wording does not match the actual script, the team may lose time explaining the mismatch during evaluation
+
+This is a small documentation gap, not a code-quality gap.
+
+### Practical conclusion for `daf4812`
+For peer review, commit `daf4812` looks ready.
+
+For final TA-facing submission quality, the remaining repository-side work is now very small:
+
+1. make the concurrent-writes bonus reliable inside the full `scripts/checkpoint3-checks.ps1` flow, especially after DB primary restore
+2. update the first README demo section so it matches the current CP3 script output and bonus coverage
+
+So the repository is now at the stage where the remaining work is mostly:
+
+- race-proofing the final demo flow
+- tightening one README summary
+
+That is a much better situation than having a large missing protocol or service.
+
+### Suggested plan to address Findings 2 and 3
+The most practical next step is to treat Finding 2 as a **stabilization problem** and Finding 3 as a **README cleanup problem**.
+
+#### Suggested plan for Finding 2
+I would suggest addressing Finding 2 in this order:
+
+1. **First, harden the reusable CP3 script.**
+   Add a short readiness gate after the DB restore path and before the concurrent-writes bonus starts.
+
+2. **Use a stronger readiness condition than only `WhoIsPrimary`.**
+   Right now, the race appears because one replica can already report `leader_id=3`, while the restored DB-3 still has not fully entered leader mode.
+
+3. **Recommended readiness rule:**
+   only start the concurrent-writes bonus after the chosen primary:
+   - reports itself as primary
+   - successfully serves a normal primary-only `Read` or `Write`
+   - keeps the same primary identity for a short stability window, for example 2 or 3 consecutive checks
+
+4. **If that is still not enough, then strengthen the DB-side election behavior.**
+   The script-side gate is the simpler first fix. If the race still survives that, then the next step should be to tighten the `books_database` leader-transition logic itself so a restored node does not appear externally ready before `is_leader` is fully true and usable.
+
+Why this is my preferred plan:
+
+- it keeps the first fix small
+- it targets the exact observed failure mode
+- it improves the live demo flow directly
+- it does not force a larger redesign unless that is truly needed
+
+#### Suggested plan for Finding 3
+For the README mismatch, I would suggest a small but precise edit to the very first demo section:
+
+1. update the expected check count so it matches the current script output
+2. explicitly mention both bonus checks now covered by the script
+3. keep the wording short, so the first section remains a quick teaching-assistant memory jogger
+
+The best outcome would be a first demo section that tells the reader, in one glance:
+
+- which script to run
+- what kind of checks it covers
+- what successful output roughly looks like
+
+#### Suggested implementation order
+If the team decides to make these fixes, I would suggest this order:
+
+1. fix Finding 2 first, because it affects demo reliability
+2. rerun the full CP3 script until the concurrent-writes step is stable
+3. then fix Finding 3 so the README matches the now-stable script behavior
+
+This order is better because the README wording should describe the final verified behavior, not a temporary intermediate state.
