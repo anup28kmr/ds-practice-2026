@@ -127,8 +127,20 @@ are designed to survive.
 - **Hot standby coordinators exist structurally.** The three executors
   run the same bully-election pattern as the databases. If the leader
   dies, one of the other two will be elected within `LEADER_TIMEOUT`
-  (5s). The queue already replays an un-acked order back to the head
-  on `ClearOrder`, so a new leader will eventually dequeue it.
+  (5s).
+
+> **Honesty note on queue redelivery.** The text above describes the
+> executor failover that *is* implemented. What is **not** implemented
+> is automatic queue redelivery: `Dequeue` is a destructive `popleft()`
+> in [order_queue/src/app.py](../order_queue/src/app.py) with no ack /
+> nack / visibility-timeout mechanism. If the coordinator dies after
+> dequeuing an order but before completing 2PC, the order is lost from
+> the queue and will not be re-offered to a replacement leader. Our
+> coordinator-failure recovery therefore depends on either (a) the
+> original leader being restarted quickly enough to finish its retry
+> loop, or (b) the user re-submitting the order. A production system
+> would add an explicit ack (e.g. `AckOrder(order_id)`) so the queue
+> only removes the message once the coordinator confirms completion.
 
 ### 4.2 What is still a gap
 

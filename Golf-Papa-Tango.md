@@ -741,3 +741,125 @@ The main work now is to move from:
 to:
 
 - "the leader coordinates a real distributed transaction that updates replicated stock and payment state correctly"
+
+## Audit update for commit `1ed359b`
+This section is a later audit update for commit `1ed359b` (`1ed359b4320f82bb032417e7bfe8d0f771468351`).
+
+The earlier sections in this file describe an older gap-analysis view of the repository. This new section records what a later audit found when the repository had already moved much closer to Checkpoint 3.
+
+### Audit conclusion
+Commit `1ed359b` looks **close to Checkpoint 3 base readiness**, but it does **not yet safely satisfy the full Checkpoint 3 brief including all bonus credit requirements**.
+
+What is already present in commit `1ed359b`:
+
+- a replicated `books_database` service with 3 replicas
+- a `payment_service`
+- a 2PC coordinator in `order_executor/src/app.py`
+- Checkpoint 3 diagrams and protocol write-ups
+- a Checkpoint 3 PowerShell check script
+- item data now carried through the queue and executor path
+
+So the repo is no longer just a Checkpoint 2 system. However, the audit found some important remaining issues.
+
+### Main audit findings
+#### 1. Restarted database replicas can come back with stale stock
+This is the most serious technical issue found in the audit.
+
+The `books_database` service starts from `SEED_STOCK`, and on restart it reloads only **pending** staged transactions from disk. It does **not** reload the latest committed stock values. Because of that:
+
+- a restarted replica can come back with old stock values
+- that replica can later win bully election again
+- the system may temporarily treat stale state as the new primary state
+
+The repository's own `scripts/checkpoint3-checks.ps1` already knows about this and works around it by forcing another checkout after restore so that replication brings all replicas back into sync.
+
+Why this matters:
+
+- it weakens the claim that the 3 replicas always behave like one logical database
+- it makes the recovery story less trustworthy during a live evaluation
+
+#### 2. The coordinator-failure write-up is stronger than the current queue implementation
+The protocol documentation says that after coordinator failure, the queue can re-deliver an un-acked order so a new leader can continue the work.
+
+But the current queue service only has:
+
+- `Enqueue`
+- `Dequeue`
+
+and `Dequeue` removes the order from the queue immediately.
+
+The queue does **not** currently show:
+
+- an ack step
+- a requeue step
+- an "in-flight but not yet finished" order state
+
+Why this matters:
+
+- the written coordinator-failure story is partly based on behavior that is not fully implemented in the queue code
+- this makes the coordinator-failure bonus weaker than the document suggests
+
+#### 3. The required `checkpoint-3` tag is still missing
+The Checkpoint 3 brief explicitly asks for a `checkpoint-3` Git tag.
+
+At the time of the audit, that tag was not present on the remote repository state that matched commit `1ed359b`.
+
+Why this matters:
+
+- even if the implementation is mostly ready, the submission is not fully compliant yet
+
+#### 4. The bonus-credit evidence is uneven
+The repository has bonus-related code and tests, but the evidence is not equally strong for all bonus items.
+
+What looks strongest:
+
+- participant-failure recovery
+
+What looks weaker:
+
+- concurrent-write bonus proof
+- coordinator-failure bonus proof
+
+Why:
+
+- the concurrent-writes test mostly prints timing observations instead of giving strong pass/fail assertions
+- the main Checkpoint 3 verification script does not run the concurrent-writes test
+- the coordinator-failure analysis is thoughtful, but part of its repo-specific recovery story depends on queue behavior that is not fully there
+
+### What the audit says about Checkpoint 3 readiness
+#### Base Checkpoint 3
+For the **base** Checkpoint 3 goals, commit `1ed359b` looks **mostly ready**:
+
+- consistency protocol exists
+- distributed commitment protocol exists
+- new service exists
+- logs exist
+- diagrams exist
+- documentation exists
+- Docker Compose setup exists
+
+So if the question is only "is there a serious Checkpoint 3 implementation here?", the answer is **yes**.
+
+#### Full Checkpoint 3 including all bonus credit
+For the stronger question "does commit `1ed359b` sufficiently satisfy the Checkpoint 3 brief, including all bonus credit requirements?", the audit answer is **no, not confidently**.
+
+The main reasons are:
+
+- stale-state risk after DB replica restart
+- queue/recovery mismatch in the coordinator-failure story
+- missing `checkpoint-3` tag
+- weaker proof for some bonus items than for others
+
+### Very short fix-before-submission checklist
+If the team wants commit `1ed359b` to become a stronger final Checkpoint 3 submission, these are the most important remaining tasks:
+
+1. Fix database recovery so a restarted replica reloads committed stock state, not only pending staged transactions.
+2. Either implement real queue redelivery / in-flight order recovery, or reduce the coordinator-failure write-up so it matches the current code honestly.
+3. Strengthen the concurrent-writes bonus proof with a clearer pass/fail test and add it to the main Checkpoint 3 verification flow.
+4. Re-check the README demo instructions so they point to the Checkpoint 3 verification path, not only the older Checkpoint 2 script.
+5. Create the required `checkpoint-3` Git tag on the final approved submission commit.
+
+### Practical team note
+This audit section should be treated as the more up-to-date status note for commit `1ed359b`.
+
+The older sections above are still useful because they explain the original design direction, but they no longer describe the repository's later Checkpoint 3 implementation state exactly.

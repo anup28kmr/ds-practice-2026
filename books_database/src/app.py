@@ -80,7 +80,7 @@ election_in_progress = False
 # we fan out to backups.
 
 kv_state_lock = threading.Lock()
-kv_store = dict(SEED_STOCK)
+kv_store = {}  # populated in serve() from disk or SEED_STOCK
 key_locks = {}  # title -> threading.Lock
 
 seq_lock = threading.Lock()
@@ -169,6 +169,42 @@ def load_persisted_all():
         except Exception as exc:
             print(f"[DB-{REPLICA_ID}] recovery_skip file={fname} err={exc!r}")
     return out
+
+
+def _kv_store_path():
+    return os.path.join(STATE_DIR, "kv_store.json")
+
+
+def persist_kv_store():
+    """Atomically flush the current kv_store to disk so a restarted
+    replica comes back with post-commit stock, not the hard-coded
+    SEED_STOCK. Same write-then-rename pattern as persist_pending.
+
+    The temp file includes the thread id so that concurrent callers
+    (e.g. parallel ReplicateWrite handlers for different keys) each
+    write to their own temp file and never race on os.replace."""
+    os.makedirs(STATE_DIR, exist_ok=True)
+    path = _kv_store_path()
+    tmp = f"{path}.{threading.get_ident()}.tmp"
+    with kv_state_lock:
+        snapshot = dict(kv_store)
+    with open(tmp, "w") as f:
+        json.dump(snapshot, f)
+    os.replace(tmp, path)
+
+
+def load_kv_store():
+    """Load kv_store from disk if a previous instance persisted it,
+    otherwise fall back to SEED_STOCK for a fresh container."""
+    path = _kv_store_path()
+    if os.path.isfile(path):
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            return {k: int(v) for k, v in data.items()}
+        except Exception as exc:
+            print(f"[DB-{REPLICA_ID}] kv_store_load_failed err={exc!r} falling_back_to=SEED_STOCK")
+    return dict(SEED_STOCK)
 
 
 def get_key_lock(title):
@@ -308,15 +344,35 @@ def timeout_loop():
 
 
 # --- Replication helper (called by the primary on Write) ---
+#
+# Persistent gRPC channels for backup replication. Creating a fresh
+# channel per call works under low concurrency but causes a connection
+# storm when several writes fan out to backups simultaneously (each
+# write opens 2 new TCP connections). Caching one channel per peer lets
+# gRPC multiplex all RPCs over a single HTTP/2 connection.
+
+_replication_channels = {}
+_replication_channels_lock = threading.Lock()
+
+
+def _get_replication_channel(addr):
+    with _replication_channels_lock:
+        ch = _replication_channels.get(addr)
+        if ch is None:
+            ch = grpc.insecure_channel(addr)
+            _replication_channels[addr] = ch
+        return ch
+
 
 def replicate_to_backups(title, quantity, seq):
     targets = [(pid, addr) for pid, addr in PEERS if pid != REPLICA_ID]
     results = {}
 
     def do_one(pid, addr):
-        resp = send_rpc(
-            addr,
-            lambda stub: stub.ReplicateWrite(
+        try:
+            ch = _get_replication_channel(addr)
+            stub = db_grpc.BooksDatabaseServiceStub(ch)
+            resp = stub.ReplicateWrite(
                 db_pb2.ReplicateWriteRequest(
                     title=title,
                     quantity=quantity,
@@ -324,9 +380,14 @@ def replicate_to_backups(title, quantity, seq):
                     from_replica=REPLICA_ID,
                 ),
                 timeout=REPLICATE_TIMEOUT,
-            ),
-        )
-        results[pid] = resp
+            )
+            results[pid] = resp
+        except Exception as exc:
+            print(
+                f"[DB-{REPLICA_ID}] replicate_rpc_error "
+                f"peer={pid} title=\"{title}\" seq={seq} err={exc!r}"
+            )
+            results[pid] = None
 
     threads = [
         threading.Thread(target=do_one, args=(pid, addr))
@@ -426,6 +487,7 @@ class BooksDatabaseService(db_grpc.BooksDatabaseServiceServicer):
 
             with kv_state_lock:
                 kv_store[request.title] = request.quantity
+            persist_kv_store()
 
         print(
             f"[DB-{REPLICA_ID}] write_committed primary={REPLICA_ID} "
@@ -450,6 +512,7 @@ class BooksDatabaseService(db_grpc.BooksDatabaseServiceServicer):
             with seq_lock:
                 if request.seq > seq_counter:
                     seq_counter = request.seq
+            persist_kv_store()
 
         print(
             f"[DB-{REPLICA_ID}] replicate_applied "
@@ -672,6 +735,7 @@ class BooksDatabaseService(db_grpc.BooksDatabaseServiceServicer):
             del pending_orders[order_id]
             committed_orders.add(order_id)
             remove_persisted(order_id)
+            persist_kv_store()
 
         for title, old, new_value, seq, acked in applied:
             print(
@@ -704,6 +768,16 @@ class BooksDatabaseService(db_grpc.BooksDatabaseServiceServicer):
 
 
 def serve():
+    global kv_store
+    # Load committed stock from disk (survives restarts) or fall back to
+    # the hard-coded SEED_STOCK for a fresh container.
+    kv_store = load_kv_store()
+    loaded_from = "disk" if os.path.isfile(_kv_store_path()) else "SEED_STOCK"
+    print(
+        f"[DB-{REPLICA_ID}] kv_store_loaded from={loaded_from} "
+        f"titles={list(kv_store.keys())}"
+    )
+
     # Phase 6 recovery: reload any staged transactions the previous instance
     # persisted before it died. From this point on pending_orders is
     # authoritative again and the coordinator's next Commit or Abort will

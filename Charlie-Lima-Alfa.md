@@ -458,16 +458,16 @@ New test payload files should live next to the Checkpoint 2 files:
 
 ## 12. Checklist (to track progress)
 
-- [ ] Order data model carries `items` (title + quantity) end to end
-- [ ] Orchestrator stops collapsing the order to `item_count`
-- [ ] Queue proto extended with `repeated OrderItem items` and stubs regenerated
-- [ ] `books_database` service with gRPC Read/Write
-- [ ] 3 database replicas in `docker-compose.yaml`
-- [ ] Consistency protocol implemented (primary-backup recommended)
-- [ ] Primary failover reuses bully election pattern
-- [ ] `payment_service` with Prepare/Commit/Abort
-- [ ] 2PC coordinator logic inside `order_executor`
-- [ ] Database participant supports Prepare/Commit/Abort
+- [x] Order data model carries `items` (title + quantity) end to end
+- [x] Orchestrator stops collapsing the order to `item_count`
+- [x] Queue proto extended with `repeated OrderItem items` and stubs regenerated
+- [x] `books_database` service with gRPC Read/Write
+- [x] 3 database replicas in `docker-compose.yaml`
+- [x] Consistency protocol implemented (primary-backup recommended)
+- [x] Primary failover reuses bully election pattern
+- [x] `payment_service` with Prepare/Commit/Abort
+- [x] 2PC coordinator logic inside `order_executor`
+- [x] Database participant supports Prepare/Commit/Abort
 - [x] `CP3_EXECUTION_ONLY` dev-time flag in orchestrator
 - [x] Logs updated for replication, consistency, payment, 2PC
 - [x] In-code docstrings added to 2PC coordinator, DB participant, payment participant, recovery helpers
@@ -478,7 +478,7 @@ New test payload files should live next to the Checkpoint 2 files:
 - [x] `scripts/checkpoint3-checks.ps1` passes end to end (including replica-convergence check)
 - [x] New test payload files added
 - [ ] Git tag `checkpoint-3` created and pushed
-- [ ] Bonus: concurrent-writes strategy documented
+- [x] Bonus: concurrent-writes strategy documented
 - [x] Bonus: participant persists staged transaction to disk before voting commit
 - [x] Bonus: participant-failure recovery demonstrated
 - [x] Bonus: coordinator-failure analysis written
@@ -820,6 +820,41 @@ section stays scannable.
   `origin/individual-sten-qy-li` (15 files, +1855/-20). Local Claude
   config under `.claude/` was deliberately excluded. The `checkpoint-3`
   git tag is Step 2's responsibility per §13 and is not created here.
+- [x] Phase 14 — gap closure (post-audit).
+  Closed the three code/documentation gaps identified in §15.4:
+  1. **Stale stock after restart.** Added `persist_kv_store()` /
+     `load_kv_store()` to [books_database/src/app.py](books_database/src/app.py).
+     Every mutation site (Write handler, ReplicateWrite handler, Commit
+     handler) now flushes `kv_store` to `STATE_DIR/kv_store.json` via
+     write-then-rename with a per-thread temp file to avoid races under
+     concurrent replication. `serve()` loads from disk on startup (log
+     line `kv_store_loaded from=disk|SEED_STOCK`). Verified: checkout
+     reduced Book A from 10→8, restart of all 3 replicas loaded
+     `from=disk`, `ReadLocal` showed 8 on all 3 replicas.
+  2. **Concurrent-writes documentation.** Added a "Concurrent writes
+     (bonus)" subsection to [README.md](README.md) and §7 to
+     [docs/consistency-redesign.md](docs/consistency-redesign.md)
+     explaining per-key locking, why per-key over global, and the test
+     reference. §12 checklist item ticked.
+  3. **Concurrent-writes test strengthened.** Rewrote
+     [books_database/tests/test_concurrent_writes.py](books_database/tests/test_concurrent_writes.py)
+     with hard pass/fail assertions and convergence checks across all 3
+     replicas. Test A (5 same-key writes) and Test B (5 different-key
+     writes) both pass. Fixed a race condition: concurrent
+     `persist_kv_store()` calls on backups shared the same `.tmp` file
+     name, causing `os.replace` to fail under parallel
+     `ReplicateWrite`. Fix: include `threading.get_ident()` in the temp
+     file name. Also switched replication from per-call channels to
+     persistent cached channels (`_replication_channels` dict) so
+     concurrent fan-outs multiplex over a single HTTP/2 connection per
+     backup.
+  4. **Queue redelivery honesty note.** Added a blockquote to
+     [docs/commitment-protocol.md](docs/commitment-protocol.md) §4.1
+     explicitly stating that `Dequeue` is a destructive `popleft()` with
+     no ack/nack/visibility-timeout and that queue redelivery is
+     described-but-not-implemented.
+  Remaining §15.4 items (git tag, evaluation slot) are release-day
+  steps per §13.
 
 ### Risk notes
 
@@ -828,4 +863,82 @@ section stays scannable.
   environment must have `grpcio-tools` installed, or the regeneration must
   be done inside a container that already has it.
 - Phase 12 needs a running Docker Desktop to really pass.
+
+---
+
+## 15. Rubric audit at commit `1ed359b`
+
+This section records an audit of the repository at commit `1ed359b`
+("Mark Phase 13 complete in Charlie-Lima-Alfa.md", 2026-04-15) against
+the Checkpoint 3 grading rubric published on the course website. The
+rubric sources are:
+
+- main Projects page:
+  <https://courses.cs.ut.ee/2026/ds/spring/Main/Projects>
+- Checkpoint 3 guide (Session 13):
+  <https://courses.cs.ut.ee/2026/ds/spring/Main/Guide12>
+- Session 10 guide (database + consistency):
+  <https://courses.cs.ut.ee/2026/ds/spring/Main/Guide9>
+- Session 11 guide (distributed commitment):
+  <https://courses.cs.ut.ee/2026/ds/spring/Main/Guide10>
+
+### 15.1 Base points (10 pts)
+
+| # | Requirement | Pts | Status | Evidence |
+|---|---|---|---|---|
+| 1 | **Consistency protocol & database module** — 3+ replicas, gRPC interface, chosen consistency protocol | 3 | Covered | 3 `books_database` replicas with bully election, synchronous primary-backup replication, gRPC `Read`/`Write`/`ReplicateWrite`/`WhoIsPrimary`, per-key locks for concurrent writes. Source: [books_database/src/app.py](books_database/src/app.py), [docker-compose.yaml](docker-compose.yaml). |
+| 2 | **Distributed commitment protocol & new service** — coordinator/participant roles, payment service with Prepare/Commit/Abort | 3 | Covered | `payment_service` with Prepare/Commit/Abort; `order_executor` leader runs `run_2pc` as coordinator; `books_database` primary and `payment_service` are participants. Source: [order_executor/src/app.py](order_executor/src/app.py), [payment_service/src/app.py](payment_service/src/app.py). |
+| 3 | **Logging** — system logs offering insight into functioning | 1 | Covered | Full key=value trace: `2pc_start`, `2pc_votes`, `2pc_decision`, `prepare_vote_commit`/`abort`, `commit_applied`, `replicate_applied`, `abort_ok`, etc., across all CP3 services. Phase 9 verified the end-to-end trace on a live stack. |
+| 4 | **Project organization & documentation** — code docs, collaboration, overall organization | 1 | Covered | [README.md](README.md) updated to Checkpoint 3 with two new top-level sections; [docs/consistency-redesign.md](docs/consistency-redesign.md) and [docs/commitment-protocol.md](docs/commitment-protocol.md) added; docstrings on all 2PC handlers, coordinator, and recovery helpers. |
+| 5 | **Consistency protocol diagram** — replicas, executor, operations | 1 | Covered | [docs/diagrams/consistency-protocol.svg](docs/diagrams/consistency-protocol.svg) — 4 lanes (executor, DB-3 primary, DB-1 backup, DB-2 backup), Write fan-out with synchronous replication, Read from primary only. |
+| 6 | **Commitment protocol diagram** — sequence diagrams (2–3 pictures) illustrating protocol messages | 1 | Covered | [docs/diagrams/commitment-protocol.svg](docs/diagrams/commitment-protocol.svg) — Case A (happy path, decision=COMMIT) and Case B (DB votes abort, decision=ABORT) in one SVG with clear phase separators and side notes on decision record and participant recovery. |
+
+### 15.2 Bonus points (up to 3 pts, 0.75 each)
+
+| # | Bonus | Pts | Status | Evidence |
+|---|---|---|---|---|
+| B1 | **Concurrent write handling** (consistency session) | 0.75 | **Covered** | Per-key locks in [books_database/src/app.py](books_database/src/app.py) (`get_key_lock`), verified by [books_database/tests/test_concurrent_writes.py](books_database/tests/test_concurrent_writes.py) with hard pass/fail assertions and cross-replica convergence checks. Strategy documented in [README.md](README.md) and [docs/consistency-redesign.md](docs/consistency-redesign.md) §7. *(Gaps from original audit closed in Phase 14.)* |
+| B2 | **Failing participant recovery** (commitment session) | 0.75 | Covered | On-disk `txn_<order>.json` persistence via write-then-rename; `load_persisted_all` recovery on startup; coordinator retry with exponential backoff and primary re-discovery; `committed_orders`/`aborted_orders` idempotency tracking. Demonstrated by [order_executor/tests/test_2pc_fail_injection.py](order_executor/tests/test_2pc_fail_injection.py) and [order_executor/tests/test_2pc_crash_recovery.py](order_executor/tests/test_2pc_crash_recovery.py). |
+| B3 | **Coordinator failure analysis** (commitment session) | 0.75 | **Covered** | [docs/commitment-protocol.md](docs/commitment-protocol.md) §§3–5: W1–W4 crash windows, the blocking problem, what our repo handles vs. gaps, four literature mitigations. §4.1 now includes an explicit honesty note that `Dequeue` is a destructive `popleft()` with no ack/requeue, so the queue-redelivery claim is clearly flagged as described-but-not-implemented. *(Caveat from original audit addressed in Phase 14.)* |
+| B4 | *(4th bonus — if one exists per the main rubric's "Maximum 4 bonus tasks … 3 points total")* | 0.75 | Unknown | The main rubric page says 4 tasks are available. The session guides (Guide9, Guide10) enumerate only 3 (B1–B3 above). There may be a 4th task on a child page not fully extracted during this audit. |
+
+### 15.3 Other submission requirements
+
+| Requirement | Status | Note |
+|---|---|---|
+| `checkpoint-3` git tag | **Not yet created** | Only `checkpoint-1` and `checkpoint-2` tags exist. Per §13 of this plan, the tag is a release-day step (Step 2's responsibility). |
+| Docker Compose spins up seamlessly | Yes | [docker-compose.yaml](docker-compose.yaml) starts all 13 services. |
+| Connects with provided frontend | Yes | [frontend/src/index.html](frontend/src/index.html) targets the orchestrator. |
+| Verification script | Yes | [scripts/checkpoint3-checks.ps1](scripts/checkpoint3-checks.ps1) + [scripts/_cp3_db_probe.py](scripts/_cp3_db_probe.py) + [test_checkout_oversold.json](test_checkout_oversold.json). |
+| Evaluation slot booked | Not yet | Scheduling link in the Session 13 guide. |
+
+### 15.4 Gaps to close before the demo
+
+1. ~~**Stale stock after DB replica restart.**~~ **Closed in Phase 14.**
+   `persist_kv_store()` / `load_kv_store()` added; every mutation site
+   flushes `kv_store` to disk; startup loads from disk or falls back to
+   `SEED_STOCK`.
+2. ~~**Document the concurrent-writes strategy (B1).**~~ **Closed in
+   Phase 14.** README and `docs/consistency-redesign.md` now explain
+   per-key locking; test rewritten with hard pass/fail assertions and
+   convergence checks; §12 checklist item ticked.
+3. ~~**Queue lacks ack/requeue (weakens B3 narrative).**~~ **Closed in
+   Phase 14.** Honesty note added to
+   [docs/commitment-protocol.md](docs/commitment-protocol.md) §4.1
+   explicitly stating `Dequeue` is destructive with no ack mechanism.
+4. **Create and push the `checkpoint-3` git tag.** Required by the
+   rubric; deferred to release day.
+5. **Book the evaluation slot.** Not a code deliverable.
+
+### 15.5 Internal documentation files
+
+The following files are **not required** by the course or any
+checkpoint. They exist purely for internal team planning, progress
+tracking, and/or recording TA feedback:
+
+| File | Location | Purpose |
+|---|---|---|
+| `Charlie-Lima-Alfa.md` | repo root | Checkpoint 3 implementation plan — phases, checklist, risk notes, team roles, this audit |
+| `Golf-Papa-Tango.md` | repo root | Earlier CP3 planning/analysis document (reviewed course pages, listed what needed to change) |
+| `vc_investigation_results.txt` | repo root | TA feedback on Checkpoint 2 vector clocks — grade + feedback quote that prompted the VC redesign |
 

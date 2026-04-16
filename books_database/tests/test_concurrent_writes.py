@@ -92,13 +92,54 @@ def run_concurrent(addr, plan, label):
     return elapsed, all_ok
 
 
+def read_local(addr, title):
+    """ReadLocal bypasses the primary-only guard."""
+    with grpc.insecure_channel(addr) as ch:
+        stub = db_grpc.BooksDatabaseServiceStub(ch)
+        return stub.ReadLocal(db_pb2.ReadRequest(title=title), timeout=3.0)
+
+
 def main():
     addr, pid = find_primary()
     print(f"primary = DB-{pid} @ {addr}")
+    failures = []
 
-    # Test B: 5 concurrent writes on 5 DIFFERENT keys. With per-key locks
-    # these should fan out to backups in parallel — wall-clock well under
-    # 5 * (single-write latency).
+    # ------------------------------------------------------------------
+    # Test A: 5 concurrent writes on the SAME key. Per-key lock
+    # serializes them, so the final value must be one of the attempted
+    # values (no torn state), and all 5 writes must succeed.
+    # ------------------------------------------------------------------
+    same_plan = [("Book A", 300 + i) for i in range(5)]
+    elapsed_same, ok_same = run_concurrent(addr, same_plan, "TEST A (same key)")
+    if not ok_same:
+        failures.append("TEST A: not all same-key writes succeeded")
+
+    r_a = read_one(addr, "Book A")
+    attempted_values = {300 + i for i in range(5)}
+    if not r_a.success:
+        failures.append(f"TEST A: Read(Book A) failed: {r_a.message}")
+    elif r_a.quantity not in attempted_values:
+        failures.append(
+            f"TEST A: final Book A = {r_a.quantity}, expected one of {attempted_values}"
+        )
+    print(f"  final Book A = {r_a.quantity} (in {attempted_values}? "
+          f"{'YES' if r_a.quantity in attempted_values else 'NO'})")
+
+    # Verify convergence: all 3 replicas must show the same value.
+    id_to_host = {rid: host for host, rid in PRIMARY_CANDIDATES}
+    values = {}
+    for rid, host in id_to_host.items():
+        rl = read_local(host, "Book A")
+        values[rid] = rl.quantity
+    print(f"  convergence: {values}")
+    if len(set(values.values())) != 1:
+        failures.append(f"TEST A: replicas diverged after same-key writes: {values}")
+
+    # ------------------------------------------------------------------
+    # Test B: 5 concurrent writes on 5 DIFFERENT keys. With per-key
+    # locks these should fan out in parallel. Each key gets a unique
+    # value, so the final read on each key must match exactly.
+    # ------------------------------------------------------------------
     different_plan = [
         ("Book A", 201),
         ("Book B", 202),
@@ -107,25 +148,39 @@ def main():
         ("Designing Data-Intensive Applications", 205),
     ]
     elapsed_diff, ok_diff = run_concurrent(addr, different_plan, "TEST B (different keys)")
+    if not ok_diff:
+        failures.append("TEST B: not all different-key writes succeeded")
 
-    # Re-confirm per-key serialization baseline: 5 concurrent writes on SAME key.
-    same_plan = [("Book A", 300 + i) for i in range(5)]
-    elapsed_same, ok_same = run_concurrent(addr, same_plan, "TEST A' (same key, smaller)")
-
-    # Verify final value is one of the attempted values (no torn state).
-    r_a = read_one(addr, "Book A")
-    consistent_a = r_a.success and (r_a.quantity in {300, 301, 302, 303, 304})
-    print(f"\nfinal Book A = {r_a.quantity} consistent={consistent_a}")
-
-    for title, qty in different_plan:
+    for title, expected in different_plan:
         r = read_one(addr, title)
-        print(f"  {title} = {r.quantity} (expected {qty}) match={r.quantity == qty}")
+        match = r.success and r.quantity == expected
+        print(f"  {title} = {r.quantity} (expected {expected}) {'OK' if match else 'FAIL'}")
+        if not match:
+            failures.append(f"TEST B: {title} = {r.quantity}, expected {expected}")
 
+    # Verify convergence on all replicas for every key.
+    for title, expected in different_plan:
+        for rid, host in id_to_host.items():
+            rl = read_local(host, title)
+            if rl.quantity != expected:
+                failures.append(
+                    f"TEST B convergence: DB-{rid} {title} = {rl.quantity}, "
+                    f"expected {expected}"
+                )
+
+    # ------------------------------------------------------------------
+    # Summary
+    # ------------------------------------------------------------------
     print()
-    print(f"elapsed(different keys) = {elapsed_diff:.2f}s")
     print(f"elapsed(same key)       = {elapsed_same:.2f}s")
-    print("  -> different-keys should be roughly same as one write's latency,")
-    print("     same-key should be ~N * single-write latency (serialized).")
+    print(f"elapsed(different keys) = {elapsed_diff:.2f}s")
+    if failures:
+        print(f"\nFAILED ({len(failures)} assertion(s)):")
+        for f in failures:
+            print(f"  - {f}")
+        sys.exit(1)
+    else:
+        print("\nCONCURRENT WRITES TEST: PASSED")
 
 
 if __name__ == "__main__":

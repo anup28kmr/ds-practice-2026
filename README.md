@@ -108,10 +108,14 @@ Point out:
 - `replicate_applied from_primary=X title="Book A" seq=N old=A new=B` — each backup applied the same `new` value
 - `read_ok title="Book A" value=B` — Read served from the primary
 
+### Concurrent writes (bonus)
+Two orders updating the same book at the same time are serialized by **per-key locks** on the primary. Each title has its own `threading.Lock` (created on first access via `get_key_lock(title)`). The lock is held for the full read-validate-write-replicate span of a `Write` or 2PC `Commit`, so two concurrent decrements on "Book A" never observe the same `old` value. Writes on *different* titles proceed in parallel because they acquire different locks. This is the simplest correct strategy: the primary is already the single serialization point, and the per-key granularity avoids a global bottleneck. Verified by [books_database/tests/test_concurrent_writes.py](./books_database/tests/test_concurrent_writes.py).
+
 ### Why this satisfies the rubric
 - separate database service: ✓ three replicas with a real gRPC interface, not an in-memory mock in the executor
 - consistency protocol chosen and documented: ✓ synchronous primary-backup, explained in [docs/consistency-redesign.md](./docs/consistency-redesign.md)
 - convergence on all replicas: ✓ shown live by `ReadLocal` against each replica returning the same value after a commit
+- concurrent write handling (bonus): ✓ per-key locks on the primary, verified by a dedicated test
 
 ## Distributed commitment protocol (2PC)
 This section covers the second new Checkpoint 3 feature: a two-phase commit coordinator in the leader `order_executor` that atomically reserves book stock in `books_database` **and** the payment in `payment_service`. The design note is at [docs/commitment-protocol.md](./docs/commitment-protocol.md).

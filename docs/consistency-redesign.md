@@ -99,7 +99,36 @@ equal, and the convergence check in
 verifies that from the outside by calling `ReadLocal` directly on each
 replica.
 
-## 7. Files involved
+## 7. Concurrent writes (bonus)
+
+The Session 10 guide asks: "How do we deal with concurrent writes by
+different clients?" In our primary-backup design the primary is already
+the single serialization point, so the remaining question is what
+granularity to lock at.
+
+We chose **per-key (per-title) locks**. Each title gets its own
+`threading.Lock`, created lazily via `get_key_lock(title)`. The lock is
+held for the full read-validate-write-replicate span of a `Write` or
+2PC `Commit`, so two concurrent decrements of the same title never
+observe the same `old` value. Writes on *different* titles proceed in
+parallel because they acquire different locks.
+
+Why per-key rather than a single global lock:
+
+- concurrent orders for different books are the common case in the demo
+  (e.g. "Book A" and "Book B" in the same test run), so serializing
+  them would be an artificial bottleneck;
+- per-key is the narrowest correct granularity for a key-value store
+  with whole-key reads and writes.
+
+Verified by
+[books_database/tests/test_concurrent_writes.py](../books_database/tests/test_concurrent_writes.py):
+10 threads writing the same key produce 10 distinct sequential
+sequence numbers with monotonically advancing `old → new` on the
+primary, and all 10 updates land on both backups.
+
+## 8. Files involved
+
 
 | File | Role |
 |---|---|
@@ -108,7 +137,7 @@ replica.
 | [docker-compose.yaml](../docker-compose.yaml) | Three replicas (`books_database_1..3`) with their own state volumes |
 | [docs/diagrams/consistency-protocol.svg](diagrams/consistency-protocol.svg) | Sequence diagram (elected primary, Write fan-out, Read path) |
 
-## 8. Known limitations
+## 9. Known limitations
 
 - **Availability degrades if any backup is down.** Because replication
   is synchronous to every live backup, a slow or dead backup will slow
