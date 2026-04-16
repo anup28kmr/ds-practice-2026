@@ -253,13 +253,17 @@ def announce_coordinator():
         )
 
 
-def start_election():
+def start_election(force=False):
     global election_in_progress, leader_id
 
     with state_lock:
         if election_in_progress:
             return
-        if has_fresh_leader_locked():
+        # Normal path: if we already have a fresh leader, do nothing.
+        # Forced path: a recovering higher-ID replica is allowed to
+        # challenge a lower-ID active leader, matching the bully rule
+        # that the highest alive replica should eventually win.
+        if (not force) and has_fresh_leader_locked():
             return
         election_in_progress = True
 
@@ -812,9 +816,19 @@ def serve():
 
     time.sleep(1.0)
     with state_lock:
-        should_start = (leader_id is None) and (not election_in_progress)
+        current_leader = leader_id
+        should_start = (
+            (not election_in_progress)
+            and (
+                current_leader is None
+                or current_leader < REPLICA_ID
+            )
+        )
     if should_start:
-        start_election()
+        # If a lower-ID leader is already active when this replica comes
+        # back, proactively challenge it so the highest live replica can
+        # reclaim primary as expected by the tests and bully semantics.
+        start_election(force=(current_leader is not None and current_leader < REPLICA_ID))
 
     server.wait_for_termination()
 

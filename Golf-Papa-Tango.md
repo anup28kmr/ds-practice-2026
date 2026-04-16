@@ -1288,3 +1288,68 @@ If the team decides to make these fixes, I would suggest this order:
 3. then fix Finding 3 so the README matches the now-stable script behavior
 
 This order is better because the README wording should describe the final verified behavior, not a temporary intermediate state.
+
+## Commit `bc2a8cd` audit results
+This section records the later audit of commit `bc2a8cd` (`bc2a8cd31c1c0bfabba805c945a86f8629f2a9e5`) on branch `individual-sten-qy-li`.
+
+Compared with commit `daf4812`, this newer commit appears to close the two repo-side issues recorded above:
+
+- the concurrent-writes test now uses a stronger stable-primary gate
+- the root README first demo section now matches the newer Checkpoint 3 script wording better
+
+However, the later audit found one new remaining repository-side issue.
+
+### Finding 2: participant-failure bonus path is still brittle in the full CP3 verifier
+The old concurrent-writes problem looks much better at `bc2a8cd`, but the **full reusable Checkpoint 3 verifier** still does not pass end-to-end reliably because the participant-failure bonus path is still fragile.
+
+What the audit observed:
+
+- the full `scripts/checkpoint3-checks.ps1 -SkipBuild` flow could still stop in `bonus:participant-failure-recovery`
+- the standalone `order_executor/tests/test_2pc_fail_injection.py` path could also fail
+- the failure was not mainly about the 2PC retry logic itself
+- instead, the fragile part was the assumption that recreated `books_database_3` would quickly become the DB primary again
+
+The most likely explanation is:
+
+- the participant-failure test probes DB leadership too optimistically
+- and the DB bully-election behavior does not strongly guarantee that a restarted higher-ID replica will immediately reclaim leadership from a lower-ID replica that is already active
+
+So this finding should be read as:
+
+- **the earlier `daf4812` Findings 2 and 3 look closed**
+- **but a different demo-reliability issue still remains at `bc2a8cd`**
+
+### Why this matters
+This is important because the participant-failure recovery path is one of the main bonus-credit proof points.
+
+If the team wants the repository to look strong not only in code, but also in repeatable teaching-assistant demo conditions, then this path should be made stable enough that:
+
+- the standalone fail-injection test can be rerun cleanly
+- the main Checkpoint 3 PowerShell verifier can also finish cleanly
+
+### Suggested next step from this audit
+The most useful follow-up is:
+
+1. harden the participant-failure test with the same kind of stable-primary gate used for the concurrent-writes test
+2. tighten the DB bully-election behavior so a restarted higher-ID DB replica can reclaim leadership more reliably
+3. rerun the full Checkpoint 3 verifier after those two fixes
+
+### Follow-up after the local fix
+The current local working tree now appears to close this archived `bc2a8cd` Finding 2.
+
+What was changed locally:
+
+- the DB bully-election path was tightened so a restarted higher-ID replica can challenge a lower active leader
+- the participant-failure test now waits for a **stable usable primary**, not just the first reported leader id
+
+What was rechecked locally after the fix:
+
+- `python order_executor/tests/test_2pc_fail_injection.py`
+- `.\scripts\checkpoint3-checks.ps1 -SkipBuild`
+
+Result of the local recheck:
+
+- the standalone participant-failure bonus test passed
+- the full Checkpoint 3 verifier passed all **19 / 19** checks
+
+So, at least in the current local repository state, the earlier `bc2a8cd` participant-failure demo-stability problem looks fixed.

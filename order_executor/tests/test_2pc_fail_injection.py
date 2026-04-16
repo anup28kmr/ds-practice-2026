@@ -48,28 +48,85 @@ def _run(cmd, timeout=120):
     )
 
 
-def find_primary():
+def wait_for_primary(expected_id=None, timeout=45, stable_checks=3):
+    """Return (addr, leader_id) once a primary is stably usable.
+
+    The naive "first replica that reports any leader_id wins" probe is
+    too optimistic. Around restarts and failovers, one replica can
+    advertise a leader_id before the named primary is actually ready to
+    serve primary-only Read/Write RPCs. We therefore require:
+
+    (a) a 2-of-3 majority via WhoIsPrimary,
+    (b) a primary-only Read against the named leader succeeds, and
+    (c) the same leader_id holds for `stable_checks` consecutive probes.
+    """
     id_to_host = {rid: addr for addr, rid in DB_HOSTS}
-    for addr, _ in DB_HOSTS:
-        try:
-            with grpc.insecure_channel(addr) as ch:
-                stub = db_grpc.BooksDatabaseServiceStub(ch)
-                r = stub.WhoIsPrimary(db_pb2.WhoIsPrimaryRequest(), timeout=2.0)
-                if r.leader_id:
-                    return id_to_host[r.leader_id], r.leader_id
-        except Exception:
-            continue
-    return None, None
-
-
-def wait_for_primary(expected_id, timeout=45):
     deadline = time.time() + timeout
+    last_answer = None
+    streak = 0
+
     while time.time() < deadline:
-        addr, pid = find_primary()
-        if pid == expected_id:
-            return addr
+        votes = {}
+        for addr, _ in DB_HOSTS:
+            try:
+                with grpc.insecure_channel(addr) as ch:
+                    stub = db_grpc.BooksDatabaseServiceStub(ch)
+                    r = stub.WhoIsPrimary(
+                        db_pb2.WhoIsPrimaryRequest(), timeout=2.0
+                    )
+                    if r.leader_id:
+                        votes[r.leader_id] = votes.get(r.leader_id, 0) + 1
+            except Exception:
+                continue
+
+        candidate_id = None
+        if votes:
+            candidate_id, candidate_votes = sorted(
+                votes.items(), key=lambda kv: (kv[1], kv[0]), reverse=True
+            )[0]
+            if candidate_votes < 2:
+                candidate_id = None
+
+        if expected_id is not None and candidate_id != expected_id:
+            candidate_id = None
+
+        probe_ok = False
+        if candidate_id is not None:
+            addr = id_to_host[candidate_id]
+            try:
+                with grpc.insecure_channel(addr) as ch:
+                    stub = db_grpc.BooksDatabaseServiceStub(ch)
+                    probe = stub.Read(
+                        db_pb2.ReadRequest(title="Book A"), timeout=2.0
+                    )
+                probe_ok = bool(probe.success)
+            except Exception:
+                probe_ok = False
+
+        if candidate_id is not None and probe_ok:
+            if candidate_id == last_answer:
+                streak += 1
+            else:
+                last_answer = candidate_id
+                streak = 1
+
+            if streak >= stable_checks:
+                return id_to_host[candidate_id], candidate_id
+        else:
+            last_answer = None
+            streak = 0
+
         time.sleep(1.0)
-    raise RuntimeError(f"timed out waiting for DB-{expected_id} to reclaim primary")
+
+    if expected_id is None:
+        raise RuntimeError(
+            f"timed out waiting for any stable DB primary "
+            f"(last_answer={last_answer}, streak={streak})"
+        )
+    raise RuntimeError(
+        f"timed out waiting for DB-{expected_id} to reclaim stable primary "
+        f"(last_answer={last_answer}, streak={streak})"
+    )
 
 
 def raw_write(addr, title, qty):
@@ -148,8 +205,7 @@ def scrape_logs(services, since, patterns, timeout=60):
 
 def main():
     # --- Baseline ---
-    addr, pid = find_primary()
-    assert pid, "no DB primary at test start"
+    addr, pid = wait_for_primary(timeout=45)
     print(f"initial primary = DB-{pid} @ {addr}")
     raw_write(addr, "Book A", 10)
     print("baseline stock: Book A = 10")
@@ -172,8 +228,8 @@ def main():
         print("compose up stderr:", r.stderr)
         raise RuntimeError("failed to recreate books_database_3 with override")
 
-    primary_addr = wait_for_primary(3, timeout=45)
-    print(f"DB-3 reclaimed primary @ {primary_addr}")
+    primary_addr, primary_id = wait_for_primary(expected_id=3, timeout=60)
+    print(f"DB-{primary_id} reclaimed primary @ {primary_addr}")
     # Let the post-election state settle (heartbeats, etc.)
     time.sleep(2.0)
 
@@ -245,7 +301,7 @@ def main():
         print("cleanup stdout:", r.stdout)
         print("cleanup stderr:", r.stderr)
     # Wait for DB-3 to reclaim primary with the clean env.
-    wait_for_primary(3, timeout=45)
+    wait_for_primary(expected_id=3, timeout=60)
     print("DB-3 back to normal, fail_next_commit=0")
 
 
