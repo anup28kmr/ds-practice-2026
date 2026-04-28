@@ -1,2 +1,4 @@
 __pycache__
 .idea
+.claude/
+books_database/state/

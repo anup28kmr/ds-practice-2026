@@ -23,9 +23,9 @@ import books_database_pb2 as db_pb2  # noqa: E402
 import books_database_pb2_grpc as db_grpc  # noqa: E402
 
 REPLICAS = [
-    (1, "127.0.0.1:50058"),
-    (2, "127.0.0.1:50059"),
-    (3, "127.0.0.1:50060"),
+    (1, "127.0.0.1:50258"),
+    (2, "127.0.0.1:50259"),
+    (3, "127.0.0.1:50260"),
 ]
 
 
@@ -58,9 +58,9 @@ def cmd_read_stock(title, tolerate_missing=False):
 
 def cmd_find_primary():
     id_to_addr = {
-        1: "127.0.0.1:50058",
-        2: "127.0.0.1:50059",
-        3: "127.0.0.1:50060",
+        1: "127.0.0.1:50258",
+        2: "127.0.0.1:50259",
+        3: "127.0.0.1:50260",
     }
     for _, addr in REPLICAS:
         try:

@@ -32,7 +32,7 @@ services:
       context: ./
       dockerfile: ./fraud_detection/Dockerfile
     ports:
-      - "50051:50051"
+      - "50251:50051"
     environment:
       - PYTHONUNBUFFERED=TRUE
       - PYTHONFILE=/app/fraud_detection/src/app.py
@@ -46,7 +46,7 @@ services:
       context: ./
       dockerfile: ./transaction_verification/Dockerfile
     ports:
-      - "50052:50052"
+      - "50252:50052"
     environment:
       - PYTHONUNBUFFERED=TRUE
       - PYTHONFILE=/app/transaction_verification/src/app.py
@@ -60,7 +60,7 @@ services:
       context: ./
       dockerfile: ./suggestions/Dockerfile
     ports:
-      - "50053:50053"
+      - "50253:50053"
     environment:
       - PYTHONUNBUFFERED=TRUE
       - PYTHONFILE=/app/suggestions/src/app.py
@@ -74,7 +74,7 @@ services:
       context: ./
       dockerfile: ./order_queue/Dockerfile
     ports:
-      - "50054:50054"
+      - "50254:50054"
     environment:
       - PYTHONUNBUFFERED=TRUE
       - PYTHONFILE=/app/order_queue/src/app.py
@@ -87,7 +87,7 @@ services:
       context: ./
       dockerfile: ./order_executor/Dockerfile
     ports:
-      - "50055:50055"
+      - "50255:50055"
     environment:
       - PYTHONUNBUFFERED=TRUE
       - PYTHONFILE=/app/order_executor/src/app.py
@@ -109,7 +109,7 @@ services:
       context: ./
       dockerfile: ./order_executor/Dockerfile
     ports:
-      - "50056:50055"
+      - "50256:50055"
     environment:
       - PYTHONUNBUFFERED=TRUE
       - PYTHONFILE=/app/order_executor/src/app.py
@@ -131,7 +131,7 @@ services:
       context: ./
       dockerfile: ./order_executor/Dockerfile
     ports:
-      - "50057:50055"
+      - "50257:50055"
     environment:
       - PYTHONUNBUFFERED=TRUE
       - PYTHONFILE=/app/order_executor/src/app.py
@@ -153,7 +153,7 @@ services:
       context: ./
       dockerfile: ./payment_service/Dockerfile
     ports:
-      - "50061:50061"
+      - "50261:50061"
     environment:
       - PYTHONUNBUFFERED=TRUE
       - PYTHONFILE=/app/payment_service/src/app.py
@@ -168,7 +168,7 @@ services:
       context: ./
       dockerfile: ./books_database/Dockerfile
     ports:
-      - "50058:50058"
+      - "50258:50058"
     environment:
       - PYTHONUNBUFFERED=TRUE
       - PYTHONFILE=/app/books_database/src/app.py
@@ -187,7 +187,7 @@ services:
       context: ./
       dockerfile: ./books_database/Dockerfile
     ports:
-      - "50059:50058"
+      - "50259:50058"
     environment:
       - PYTHONUNBUFFERED=TRUE
       - PYTHONFILE=/app/books_database/src/app.py
@@ -206,7 +206,7 @@ services:
       context: ./
       dockerfile: ./books_database/Dockerfile
     ports:
-      - "50060:50058"
+      - "50260:50058"
     environment:
       - PYTHONUNBUFFERED=TRUE
       - PYTHONFILE=/app/books_database/src/app.py
