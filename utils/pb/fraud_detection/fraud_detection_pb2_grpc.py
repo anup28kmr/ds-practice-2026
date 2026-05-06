@@ -49,6 +49,11 @@ class FraudDetectionServiceStub(object):
                 request_serializer=fraud__detection__pb2.EventRequest.SerializeToString,
                 response_deserializer=fraud__detection__pb2.EventResponse.FromString,
                 _registered_method=True)
+        self.ForwardVC = channel.unary_unary(
+                '/fraud_detection.FraudDetectionService/ForwardVC',
+                request_serializer=fraud__detection__pb2.VCForward.SerializeToString,
+                response_deserializer=fraud__detection__pb2.EventResponse.FromString,
+                _registered_method=True)
         self.ClearOrder = channel.unary_unary(
                 '/fraud_detection.FraudDetectionService/ClearOrder',
                 request_serializer=fraud__detection__pb2.ClearOrderRequest.SerializeToString,
@@ -60,17 +65,13 @@ class FraudDetectionServiceServicer(object):
     """Missing associated documentation comment in .proto file."""
 
     def InitOrder(self, request, context):
-        """Required for Seminar 5:
-        Orchestrator sends the order once, service stores it locally and
-        initializes its per-order vector clock.
-        """
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
     def CheckUserFraud(self, request, context):
-        """Example Seminar 5 fraud-related events:
-        """
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -81,9 +82,15 @@ class FraudDetectionServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def ClearOrder(self, request, context):
-        """Optional bonus event from Seminar 5:
+    def ForwardVC(self, request, context):
+        """Receive a forwarded vector clock from another microservice.
         """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ClearOrder(self, request, context):
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -104,6 +111,11 @@ def add_FraudDetectionServiceServicer_to_server(servicer, server):
             'CheckCardFraud': grpc.unary_unary_rpc_method_handler(
                     servicer.CheckCardFraud,
                     request_deserializer=fraud__detection__pb2.EventRequest.FromString,
+                    response_serializer=fraud__detection__pb2.EventResponse.SerializeToString,
+            ),
+            'ForwardVC': grpc.unary_unary_rpc_method_handler(
+                    servicer.ForwardVC,
+                    request_deserializer=fraud__detection__pb2.VCForward.FromString,
                     response_serializer=fraud__detection__pb2.EventResponse.SerializeToString,
             ),
             'ClearOrder': grpc.unary_unary_rpc_method_handler(
@@ -192,6 +204,33 @@ class FraudDetectionService(object):
             target,
             '/fraud_detection.FraudDetectionService/CheckCardFraud',
             fraud__detection__pb2.EventRequest.SerializeToString,
+            fraud__detection__pb2.EventResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ForwardVC(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/fraud_detection.FraudDetectionService/ForwardVC',
+            fraud__detection__pb2.VCForward.SerializeToString,
             fraud__detection__pb2.EventResponse.FromString,
             options,
             channel_credentials,

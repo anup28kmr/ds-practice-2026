@@ -86,14 +86,14 @@
 
     <script>
         const items = [
-            { name: "Book A", quantity: 1 },
-            { name: "Book B", quantity: 2 }
+            { title: "Book A", quantity: 1 },
+            { title: "Book B", quantity: 2 }
         ];
 
         const itemListElement = document.getElementById('itemList');
         items.forEach(item => {
             const li = document.createElement('li');
-            li.textContent = `${item.name} - Quantity: ${item.quantity}`;
+            li.textContent = `${item.title} - Quantity: ${item.quantity}`;
             li.className = "bg-gray-100 p-3 rounded-lg";
             itemListElement.appendChild(li);
         });

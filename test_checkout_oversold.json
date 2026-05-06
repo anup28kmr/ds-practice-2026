@@ -1,0 +1,20 @@
+{
+  "user": {
+    "name": "Oversold Oliver",
+    "contact": "oversold@example.com",
+    "creditCard": {
+      "number": "4111111111111111",
+      "expirationDate": "12/30",
+      "cvv": "123"
+    },
+    "userComment": "Deliberately requests more copies than exist to exercise 2PC abort."
+  },
+  "items": [
+    {
+      "name": "Book A",
+      "quantity": 999
+    }
+  ],
+  "shippingMethod": "Standard",
+  "termsAndConditionsAccepted": true
+}

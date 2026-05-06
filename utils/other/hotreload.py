@@ -27,6 +27,13 @@ class OnAnyModifiedFileHandler(FileSystemEventHandler):
         if event.is_directory or '__pycache__' in event.src_path:
             return  # Ignore directories and __pycache__
 
+        # Skip runtime state dirs (e.g. /app/state for the 2PC participant
+        # write-ahead log). Writes there are transaction data, not source
+        # code changes, so a reload would drop the in-memory pending buffer
+        # the coordinator is still trying to reach.
+        if '/app/state/' in event.src_path or event.src_path.startswith('/app/state'):
+            return
+
         # Track pending files and their last modification time
         self.pending_files[event.src_path] = time.time()
 

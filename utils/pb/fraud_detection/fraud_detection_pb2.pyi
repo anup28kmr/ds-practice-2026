@@ -11,8 +11,16 @@ class VectorClock(_message.Message):
     values: _containers.RepeatedScalarFieldContainer[int]
     def __init__(self, values: _Optional[_Iterable[int]] = ...) -> None: ...
 
+class OrderItem(_message.Message):
+    __slots__ = ("title", "quantity")
+    TITLE_FIELD_NUMBER: _ClassVar[int]
+    QUANTITY_FIELD_NUMBER: _ClassVar[int]
+    title: str
+    quantity: int
+    def __init__(self, title: _Optional[str] = ..., quantity: _Optional[int] = ...) -> None: ...
+
 class OrderData(_message.Message):
-    __slots__ = ("order_id", "user_name", "user_contact", "card_number", "expiration_date", "cvv", "item_count", "terms_accepted")
+    __slots__ = ("order_id", "user_name", "user_contact", "card_number", "expiration_date", "cvv", "item_count", "terms_accepted", "items")
     ORDER_ID_FIELD_NUMBER: _ClassVar[int]
     USER_NAME_FIELD_NUMBER: _ClassVar[int]
     USER_CONTACT_FIELD_NUMBER: _ClassVar[int]
@@ -21,6 +29,7 @@ class OrderData(_message.Message):
     CVV_FIELD_NUMBER: _ClassVar[int]
     ITEM_COUNT_FIELD_NUMBER: _ClassVar[int]
     TERMS_ACCEPTED_FIELD_NUMBER: _ClassVar[int]
+    ITEMS_FIELD_NUMBER: _ClassVar[int]
     order_id: str
     user_name: str
     user_contact: str
@@ -29,7 +38,8 @@ class OrderData(_message.Message):
     cvv: str
     item_count: int
     terms_accepted: bool
-    def __init__(self, order_id: _Optional[str] = ..., user_name: _Optional[str] = ..., user_contact: _Optional[str] = ..., card_number: _Optional[str] = ..., expiration_date: _Optional[str] = ..., cvv: _Optional[str] = ..., item_count: _Optional[int] = ..., terms_accepted: bool = ...) -> None: ...
+    items: _containers.RepeatedCompositeFieldContainer[OrderItem]
+    def __init__(self, order_id: _Optional[str] = ..., user_name: _Optional[str] = ..., user_contact: _Optional[str] = ..., card_number: _Optional[str] = ..., expiration_date: _Optional[str] = ..., cvv: _Optional[str] = ..., item_count: _Optional[int] = ..., terms_accepted: bool = ..., items: _Optional[_Iterable[_Union[OrderItem, _Mapping]]] = ...) -> None: ...
 
 class InitOrderRequest(_message.Message):
     __slots__ = ("order",)
@@ -54,6 +64,20 @@ class EventResponse(_message.Message):
     message: str
     vc: VectorClock
     def __init__(self, success: bool = ..., message: _Optional[str] = ..., vc: _Optional[_Union[VectorClock, _Mapping]] = ...) -> None: ...
+
+class VCForward(_message.Message):
+    __slots__ = ("order_id", "source_event", "vc", "success", "message")
+    ORDER_ID_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_EVENT_FIELD_NUMBER: _ClassVar[int]
+    VC_FIELD_NUMBER: _ClassVar[int]
+    SUCCESS_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    order_id: str
+    source_event: str
+    vc: VectorClock
+    success: bool
+    message: str
+    def __init__(self, order_id: _Optional[str] = ..., source_event: _Optional[str] = ..., vc: _Optional[_Union[VectorClock, _Mapping]] = ..., success: bool = ..., message: _Optional[str] = ...) -> None: ...
 
 class ClearOrderRequest(_message.Message):
     __slots__ = ("order_id", "final_vc")

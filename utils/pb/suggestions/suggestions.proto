@@ -8,11 +8,22 @@ service SuggestionsService {
   rpc PrecomputeSuggestions (EventRequest) returns (EventResponse);
   rpc FinalizeSuggestions (EventRequest) returns (SuggestionsEventResponse);
 
+  // Receive a forwarded vector clock from another microservice.
+  rpc ForwardVC (VCForward) returns (EventResponse);
+
+  // Block until the full pipeline completes for this order, then return the result.
+  rpc AwaitPipelineResult (PipelineResultRequest) returns (PipelineResultResponse);
+
   rpc ClearOrder (ClearOrderRequest) returns (EventResponse);
 }
 
 message VectorClock {
   repeated int32 values = 1;
+}
+
+message OrderItem {
+  string title = 1;
+  int32 quantity = 2;
 }
 
 message OrderData {
@@ -24,6 +35,7 @@ message OrderData {
   string cvv = 6;
   int32 item_count = 7;
   bool terms_accepted = 8;
+  repeated OrderItem items = 9;
 }
 
 message InitOrderRequest {
@@ -48,6 +60,25 @@ message SuggestedBook {
 }
 
 message SuggestionsEventResponse {
+  bool success = 1;
+  string message = 2;
+  VectorClock vc = 3;
+  repeated SuggestedBook books = 4;
+}
+
+message VCForward {
+  string order_id = 1;
+  string source_event = 2;
+  VectorClock vc = 3;
+  bool success = 4;
+  string message = 5;
+}
+
+message PipelineResultRequest {
+  string order_id = 1;
+}
+
+message PipelineResultResponse {
   bool success = 1;
   string message = 2;
   VectorClock vc = 3;

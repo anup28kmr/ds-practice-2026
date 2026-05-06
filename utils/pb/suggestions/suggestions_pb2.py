@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x11suggestions.proto\x12\x0bsuggestions\"\x1d\n\x0bVectorClock\x12\x0e\n\x06values\x18\x01 \x03(\x05\"\xad\x01\n\tOrderData\x12\x10\n\x08order_id\x18\x01 \x01(\t\x12\x11\n\tuser_name\x18\x02 \x01(\t\x12\x14\n\x0cuser_contact\x18\x03 \x01(\t\x12\x13\n\x0b\x63\x61rd_number\x18\x04 \x01(\t\x12\x17\n\x0f\x65xpiration_date\x18\x05 \x01(\t\x12\x0b\n\x03\x63vv\x18\x06 \x01(\t\x12\x12\n\nitem_count\x18\x07 \x01(\x05\x12\x16\n\x0eterms_accepted\x18\x08 \x01(\x08\"9\n\x10InitOrderRequest\x12%\n\x05order\x18\x01 \x01(\x0b\x32\x16.suggestions.OrderData\"F\n\x0c\x45ventRequest\x12\x10\n\x08order_id\x18\x01 \x01(\t\x12$\n\x02vc\x18\x02 \x01(\x0b\x32\x18.suggestions.VectorClock\"W\n\rEventResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t\x12$\n\x02vc\x18\x03 \x01(\x0b\x32\x18.suggestions.VectorClock\">\n\rSuggestedBook\x12\x0e\n\x06\x62ookId\x18\x01 \x01(\t\x12\r\n\x05title\x18\x02 \x01(\t\x12\x0e\n\x06\x61uthor\x18\x03 \x01(\t\"\x8d\x01\n\x18SuggestionsEventResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t\x12$\n\x02vc\x18\x03 \x01(\x0b\x32\x18.suggestions.VectorClock\x12)\n\x05\x62ooks\x18\x04 \x03(\x0b\x32\x1a.suggestions.SuggestedBook\"Q\n\x11\x43learOrderRequest\x12\x10\n\x08order_id\x18\x01 \x01(\t\x12*\n\x08\x66inal_vc\x18\x02 \x01(\x0b\x32\x18.suggestions.VectorClock2\xcf\x02\n\x12SuggestionsService\x12\x46\n\tInitOrder\x12\x1d.suggestions.InitOrderRequest\x1a\x1a.suggestions.EventResponse\x12N\n\x15PrecomputeSuggestions\x12\x19.suggestions.EventRequest\x1a\x1a.suggestions.EventResponse\x12W\n\x13\x46inalizeSuggestions\x12\x19.suggestions.EventRequest\x1a%.suggestions.SuggestionsEventResponse\x12H\n\nClearOrder\x12\x1e.suggestions.ClearOrderRequest\x1a\x1a.suggestions.EventResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x11suggestions.proto\x12\x0bsuggestions\"\x1d\n\x0bVectorClock\x12\x0e\n\x06values\x18\x01 \x03(\x05\",\n\tOrderItem\x12\r\n\x05title\x18\x01 \x01(\t\x12\x10\n\x08quantity\x18\x02 \x01(\x05\"\xd4\x01\n\tOrderData\x12\x10\n\x08order_id\x18\x01 \x01(\t\x12\x11\n\tuser_name\x18\x02 \x01(\t\x12\x14\n\x0cuser_contact\x18\x03 \x01(\t\x12\x13\n\x0b\x63\x61rd_number\x18\x04 \x01(\t\x12\x17\n\x0f\x65xpiration_date\x18\x05 \x01(\t\x12\x0b\n\x03\x63vv\x18\x06 \x01(\t\x12\x12\n\nitem_count\x18\x07 \x01(\x05\x12\x16\n\x0eterms_accepted\x18\x08 \x01(\x08\x12%\n\x05items\x18\t \x03(\x0b\x32\x16.suggestions.OrderItem\"9\n\x10InitOrderRequest\x12%\n\x05order\x18\x01 \x01(\x0b\x32\x16.suggestions.OrderData\"F\n\x0c\x45ventRequest\x12\x10\n\x08order_id\x18\x01 \x01(\t\x12$\n\x02vc\x18\x02 \x01(\x0b\x32\x18.suggestions.VectorClock\"W\n\rEventResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t\x12$\n\x02vc\x18\x03 \x01(\x0b\x32\x18.suggestions.VectorClock\">\n\rSuggestedBook\x12\x0e\n\x06\x62ookId\x18\x01 \x01(\t\x12\r\n\x05title\x18\x02 \x01(\t\x12\x0e\n\x06\x61uthor\x18\x03 \x01(\t\"\x8d\x01\n\x18SuggestionsEventResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t\x12$\n\x02vc\x18\x03 \x01(\x0b\x32\x18.suggestions.VectorClock\x12)\n\x05\x62ooks\x18\x04 \x03(\x0b\x32\x1a.suggestions.SuggestedBook\"{\n\tVCForward\x12\x10\n\x08order_id\x18\x01 \x01(\t\x12\x14\n\x0csource_event\x18\x02 \x01(\t\x12$\n\x02vc\x18\x03 \x01(\x0b\x32\x18.suggestions.VectorClock\x12\x0f\n\x07success\x18\x04 \x01(\x08\x12\x0f\n\x07message\x18\x05 \x01(\t\")\n\x15PipelineResultRequest\x12\x10\n\x08order_id\x18\x01 \x01(\t\"\x8b\x01\n\x16PipelineResultResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t\x12$\n\x02vc\x18\x03 \x01(\x0b\x32\x18.suggestions.VectorClock\x12)\n\x05\x62ooks\x18\x04 \x03(\x0b\x32\x1a.suggestions.SuggestedBook\"Q\n\x11\x43learOrderRequest\x12\x10\n\x08order_id\x18\x01 \x01(\t\x12*\n\x08\x66inal_vc\x18\x02 \x01(\x0b\x32\x18.suggestions.VectorClock2\xf0\x03\n\x12SuggestionsService\x12\x46\n\tInitOrder\x12\x1d.suggestions.InitOrderRequest\x1a\x1a.suggestions.EventResponse\x12N\n\x15PrecomputeSuggestions\x12\x19.suggestions.EventRequest\x1a\x1a.suggestions.EventResponse\x12W\n\x13\x46inalizeSuggestions\x12\x19.suggestions.EventRequest\x1a%.suggestions.SuggestionsEventResponse\x12?\n\tForwardVC\x12\x16.suggestions.VCForward\x1a\x1a.suggestions.EventResponse\x12^\n\x13\x41waitPipelineResult\x12\".suggestions.PipelineResultRequest\x1a#.suggestions.PipelineResultResponse\x12H\n\nClearOrder\x12\x1e.suggestions.ClearOrderRequest\x1a\x1a.suggestions.EventResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -33,20 +33,28 @@ if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
   _globals['_VECTORCLOCK']._serialized_start=34
   _globals['_VECTORCLOCK']._serialized_end=63
-  _globals['_ORDERDATA']._serialized_start=66
-  _globals['_ORDERDATA']._serialized_end=239
-  _globals['_INITORDERREQUEST']._serialized_start=241
-  _globals['_INITORDERREQUEST']._serialized_end=298
-  _globals['_EVENTREQUEST']._serialized_start=300
-  _globals['_EVENTREQUEST']._serialized_end=370
-  _globals['_EVENTRESPONSE']._serialized_start=372
-  _globals['_EVENTRESPONSE']._serialized_end=459
-  _globals['_SUGGESTEDBOOK']._serialized_start=461
-  _globals['_SUGGESTEDBOOK']._serialized_end=523
-  _globals['_SUGGESTIONSEVENTRESPONSE']._serialized_start=526
-  _globals['_SUGGESTIONSEVENTRESPONSE']._serialized_end=667
-  _globals['_CLEARORDERREQUEST']._serialized_start=669
-  _globals['_CLEARORDERREQUEST']._serialized_end=750
-  _globals['_SUGGESTIONSSERVICE']._serialized_start=753
-  _globals['_SUGGESTIONSSERVICE']._serialized_end=1088
+  _globals['_ORDERITEM']._serialized_start=65
+  _globals['_ORDERITEM']._serialized_end=109
+  _globals['_ORDERDATA']._serialized_start=112
+  _globals['_ORDERDATA']._serialized_end=324
+  _globals['_INITORDERREQUEST']._serialized_start=326
+  _globals['_INITORDERREQUEST']._serialized_end=383
+  _globals['_EVENTREQUEST']._serialized_start=385
+  _globals['_EVENTREQUEST']._serialized_end=455
+  _globals['_EVENTRESPONSE']._serialized_start=457
+  _globals['_EVENTRESPONSE']._serialized_end=544
+  _globals['_SUGGESTEDBOOK']._serialized_start=546
+  _globals['_SUGGESTEDBOOK']._serialized_end=608
+  _globals['_SUGGESTIONSEVENTRESPONSE']._serialized_start=611
+  _globals['_SUGGESTIONSEVENTRESPONSE']._serialized_end=752
+  _globals['_VCFORWARD']._serialized_start=754
+  _globals['_VCFORWARD']._serialized_end=877
+  _globals['_PIPELINERESULTREQUEST']._serialized_start=879
+  _globals['_PIPELINERESULTREQUEST']._serialized_end=920
+  _globals['_PIPELINERESULTRESPONSE']._serialized_start=923
+  _globals['_PIPELINERESULTRESPONSE']._serialized_end=1062
+  _globals['_CLEARORDERREQUEST']._serialized_start=1064
+  _globals['_CLEARORDERREQUEST']._serialized_end=1145
+  _globals['_SUGGESTIONSSERVICE']._serialized_start=1148
+  _globals['_SUGGESTIONSSERVICE']._serialized_end=1644
 # @@protoc_insertion_point(module_scope)

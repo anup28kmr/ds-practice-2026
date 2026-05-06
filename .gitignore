@@ -1,2 +1,10 @@
 __pycache__
 .idea
+.claude/
+books_database/state/
+
+# Local-only development notes (kept out of the remote repository).
+# All .md files except the root README.md are excluded so that human
+# reviewers see a single concise document rather than scattered notes.
+*.md
+!/README.md

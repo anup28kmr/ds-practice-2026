@@ -3,21 +3,24 @@ syntax = "proto3";
 package fraud_detection;
 
 service FraudDetectionService {
-  // Required for Seminar 5:
-  // Orchestrator sends the order once, service stores it locally and
-  // initializes its per-order vector clock.
   rpc InitOrder (InitOrderRequest) returns (EventResponse);
 
-  // Example Seminar 5 fraud-related events:
   rpc CheckUserFraud (EventRequest) returns (EventResponse);
   rpc CheckCardFraud (EventRequest) returns (EventResponse);
 
-  // Optional bonus event from Seminar 5:
+  // Receive a forwarded vector clock from another microservice.
+  rpc ForwardVC (VCForward) returns (EventResponse);
+
   rpc ClearOrder (ClearOrderRequest) returns (EventResponse);
 }
 
 message VectorClock {
   repeated int32 values = 1;
+}
+
+message OrderItem {
+  string title = 1;
+  int32 quantity = 2;
 }
 
 message OrderData {
@@ -29,6 +32,7 @@ message OrderData {
   string cvv = 6;
   int32 item_count = 7;
   bool terms_accepted = 8;
+  repeated OrderItem items = 9;
 }
 
 message InitOrderRequest {
@@ -44,6 +48,14 @@ message EventResponse {
   bool success = 1;
   string message = 2;
   VectorClock vc = 3;
+}
+
+message VCForward {
+  string order_id = 1;
+  string source_event = 2;
+  VectorClock vc = 3;
+  bool success = 4;
+  string message = 5;
 }
 
 message ClearOrderRequest {

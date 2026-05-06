@@ -48,6 +48,7 @@ def merge_vc(local_vc, incoming_vc):
 
 
 def tick(vc, idx):
+    vc = list(vc)
     vc[idx] += 1
     return vc
 
@@ -65,7 +66,25 @@ class SuggestionsService(suggestions_grpc.SuggestionsServiceServicer):
             orders[order.order_id] = {
                 "order": order,
                 "vc": [0, 0, 0],
+                "lock": threading.Lock(),
                 "books": [],
+                # Causal gating state for event g (FinalizeSuggestions).
+                # g needs BOTH f (PrecomputeSuggestions, local) AND e (CheckCardFraud, from FD).
+                "f_done": False,
+                "f_vc": None,
+                "f_success": True,
+                "f_message": "",
+                "e_received": False,
+                "e_vc": None,
+                "e_success": True,
+                "e_message": "",
+                "g_triggered": False,
+                # Pipeline result: set when g completes or a failure is final.
+                "pipeline_done": threading.Event(),
+                "pipeline_success": False,
+                "pipeline_message": "",
+                "pipeline_vc": [0, 0, 0],
+                "pipeline_books": [],
             }
 
         print(f"[SUG] order={order.order_id} event=InitOrder vc={[0, 0, 0]} success=True")
@@ -76,8 +95,68 @@ class SuggestionsService(suggestions_grpc.SuggestionsServiceServicer):
             vc=suggestions.VectorClock(values=[0, 0, 0]),
         )
 
+    def _complete_pipeline(self, state, success, message, vc, books):
+        state["pipeline_success"] = success
+        state["pipeline_message"] = message
+        state["pipeline_vc"] = vc
+        state["pipeline_books"] = books
+        state["pipeline_done"].set()
+
+    def _try_run_g(self, order_id, state):
+        """Check if both prerequisites for event g are met. If so, run FinalizeSuggestions."""
+        with state["lock"]:
+            if state["g_triggered"]:
+                return
+            if not (state["f_done"] and state["e_received"]):
+                return
+            state["g_triggered"] = True
+
+            f_vc = state["f_vc"]
+            f_success = state["f_success"]
+            f_message = state["f_message"]
+            e_vc = state["e_vc"]
+            e_success = state["e_success"]
+            e_message = state["e_message"]
+
+        # If either prerequisite failed, propagate failure.
+        if not f_success:
+            print(f"[SUG] order={order_id} event=FinalizeSuggestions skipped (f failed: {f_message})")
+            self._complete_pipeline(state, False, f_message, f_vc, [])
+            return
+        if not e_success:
+            print(f"[SUG] order={order_id} event=FinalizeSuggestions skipped (e failed: {e_message})")
+            self._complete_pipeline(state, False, e_message, e_vc, [])
+            return
+
+        # Both f and e succeeded: merge their VCs and run g.
+        merged = merge_vc(f_vc, e_vc)
+
+        with state["lock"]:
+            local_vc = state["vc"]
+            vc = merge_vc(local_vc, merged)
+            vc = tick(vc, SERVICE_INDEX)
+            state["vc"] = vc
+
+        prepared_books = state["books"]
+        success = len(prepared_books) > 0
+        message = (
+            "Suggestions finalized."
+            if success
+            else "No prepared suggestions available."
+        )
+
+        print(
+            f"[SUG] order={order_id} event=FinalizeSuggestions "
+            f"vc={vc} success={success} returned_books={len(prepared_books)}"
+        )
+
+        self._complete_pipeline(state, success, message, vc, prepared_books)
+
     def PrecomputeSuggestions(self, request, context):
-        state = get_order_state(request.order_id)
+        """Event f: called by TV after event a. After processing, checks if e's VC
+        has arrived so that event g can run."""
+        order_id = request.order_id
+        state = get_order_state(order_id)
         if state is None:
             return suggestions.EventResponse(
                 success=False,
@@ -86,10 +165,12 @@ class SuggestionsService(suggestions_grpc.SuggestionsServiceServicer):
             )
 
         incoming_vc = list(request.vc.values)
-        local_vc = state["vc"]
-        vc = merge_vc(local_vc, incoming_vc)
-        vc = tick(vc, SERVICE_INDEX)
-        state["vc"] = vc
+
+        with state["lock"]:
+            local_vc = state["vc"]
+            vc = merge_vc(local_vc, incoming_vc)
+            vc = tick(vc, SERVICE_INDEX)
+            state["vc"] = vc
 
         item_count = state["order"].item_count
 
@@ -103,9 +184,18 @@ class SuggestionsService(suggestions_grpc.SuggestionsServiceServicer):
             message = "Cannot prepare suggestions for empty order."
 
         print(
-            f"[SUG] order={request.order_id} event=PrecomputeSuggestions "
+            f"[SUG] order={order_id} event=PrecomputeSuggestions "
             f"vc={vc} success={success} prepared_books={len(state['books'])}"
         )
+
+        # Record f's result and attempt to trigger g.
+        with state["lock"]:
+            state["f_done"] = True
+            state["f_vc"] = vc
+            state["f_success"] = success
+            state["f_message"] = message
+
+        self._try_run_g(order_id, state)
 
         return suggestions.EventResponse(
             success=success,
@@ -113,8 +203,122 @@ class SuggestionsService(suggestions_grpc.SuggestionsServiceServicer):
             vc=suggestions.VectorClock(values=vc),
         )
 
+    def ForwardVC(self, request, context):
+        """Receive a forwarded VC from another microservice."""
+        order_id = request.order_id
+        source_event = request.source_event
+        incoming_vc = list(request.vc.values)
+        success = request.success
+        message = request.message
+
+        state = get_order_state(order_id)
+        if state is None:
+            return suggestions.EventResponse(
+                success=False,
+                message="Order not found in suggestions service.",
+                vc=suggestions.VectorClock(values=[0, 0, 0]),
+            )
+
+        print(
+            f"[SUG] order={order_id} event=ForwardVC source={source_event} "
+            f"vc={incoming_vc} success={success}"
+        )
+
+        if source_event == "e":
+            with state["lock"]:
+                state["e_received"] = True
+                state["e_vc"] = incoming_vc
+                state["e_success"] = success
+                state["e_message"] = message
+
+            self._try_run_g(order_id, state)
+        elif source_event == "a":
+            # a failed: no f will ever come (since TV won't call PrecomputeSuggestions).
+            # Also no c→e chain, so mark both as failed.
+            with state["lock"]:
+                if not state["f_done"]:
+                    state["f_done"] = True
+                    state["f_vc"] = incoming_vc
+                    state["f_success"] = False
+                    state["f_message"] = message
+                if not state["e_received"]:
+                    state["e_received"] = True
+                    state["e_vc"] = incoming_vc
+                    state["e_success"] = False
+                    state["e_message"] = message
+
+            self._try_run_g(order_id, state)
+        elif source_event == "f":
+            # f call itself failed (exception in TV calling SUG)
+            with state["lock"]:
+                if not state["f_done"]:
+                    state["f_done"] = True
+                    state["f_vc"] = incoming_vc
+                    state["f_success"] = False
+                    state["f_message"] = message
+
+            self._try_run_g(order_id, state)
+        elif source_event == "d":
+            # d call failed (exception in TV calling FD), so e will never complete.
+            with state["lock"]:
+                if not state["e_received"]:
+                    state["e_received"] = True
+                    state["e_vc"] = incoming_vc
+                    state["e_success"] = False
+                    state["e_message"] = message
+
+            self._try_run_g(order_id, state)
+
+        return suggestions.EventResponse(
+            success=True,
+            message="VC forwarded.",
+            vc=suggestions.VectorClock(values=incoming_vc),
+        )
+
+    def AwaitPipelineResult(self, request, context):
+        """Block until the full event pipeline completes for this order."""
+        order_id = request.order_id
+        state = get_order_state(order_id)
+        if state is None:
+            return suggestions.PipelineResultResponse(
+                success=False,
+                message="Order not found in suggestions service.",
+                vc=suggestions.VectorClock(values=[0, 0, 0]),
+            )
+
+        # Wait for pipeline completion (event g or a propagated failure).
+        state["pipeline_done"].wait(timeout=30.0)
+
+        if not state["pipeline_done"].is_set():
+            return suggestions.PipelineResultResponse(
+                success=False,
+                message="Pipeline timed out.",
+                vc=suggestions.VectorClock(values=state["vc"]),
+            )
+
+        response = suggestions.PipelineResultResponse(
+            success=state["pipeline_success"],
+            message=state["pipeline_message"],
+            vc=suggestions.VectorClock(values=state["pipeline_vc"]),
+        )
+
+        for book in state["pipeline_books"]:
+            b = response.books.add()
+            b.bookId = book["bookId"]
+            b.title = book["title"]
+            b.author = book["author"]
+
+        print(
+            f"[SUG] order={order_id} event=AwaitPipelineResult "
+            f"success={state['pipeline_success']} vc={state['pipeline_vc']}"
+        )
+
+        return response
+
     def FinalizeSuggestions(self, request, context):
-        state = get_order_state(request.order_id)
+        """Event g: kept as an RPC for backward compat, but now triggered internally."""
+        order_id = request.order_id
+        state = get_order_state(order_id)
         if state is None:
             return suggestions.SuggestionsEventResponse(
                 success=False,
@@ -124,10 +328,12 @@ class SuggestionsService(suggestions_grpc.SuggestionsServiceServicer):
             )
 
         incoming_vc = list(request.vc.values)
-        local_vc = state["vc"]
-        vc = merge_vc(local_vc, incoming_vc)
-        vc = tick(vc, SERVICE_INDEX)
-        state["vc"] = vc
+
+        with state["lock"]:
+            local_vc = state["vc"]
+            vc = merge_vc(local_vc, incoming_vc)
+            vc = tick(vc, SERVICE_INDEX)
+            state["vc"] = vc
 
         prepared_books = state["books"]
         success = len(prepared_books) > 0
@@ -150,7 +356,7 @@ class SuggestionsService(suggestions_grpc.SuggestionsServiceServicer):
             b.author = book["author"]
 
         print(
-            f"[SUG] order={request.order_id} event=FinalizeSuggestions "
+            f"[SUG] order={order_id} event=FinalizeSuggestions "
             f"vc={vc} success={success} returned_books={len(prepared_books)}"
         )
 
@@ -170,8 +376,9 @@ class SuggestionsService(suggestions_grpc.SuggestionsServiceServicer):
                     vc=suggestions.VectorClock(values=[0, 0, 0]),
                 )
 
-            local_vc = state["vc"]
-            can_clear = all(a <= b for a, b in zip(local_vc, final_vc))
+            with state["lock"]:
+                local_vc = state["vc"]
+                can_clear = all(a <= b for a, b in zip(local_vc, final_vc))
 
             if can_clear:
                 del orders[order_id]
