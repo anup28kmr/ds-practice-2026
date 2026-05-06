@@ -39,15 +39,15 @@ docker compose down
 
 | # | Rubric item | Pts | Where it lives | How to see it pass |
 |---|---|---:|---|---|
-| R1 | Consistency protocol + DB module | 3 | [books_database/](books_database/), design rationale in [Appendix A.1](#a1--consistency-protocol-design-r1) | verifier checks 7, 8, 16, 17 |
-| R2 | Commitment protocol + new service | 3 | [order_executor/src/app.py](order_executor/src/app.py) `run_2pc`, [payment_service/](payment_service/), design rationale in [Appendix A.2](#a2--commitment-protocol-design-r2--b3) | verifier checks 14, 15 |
-| R3 | Logging | 1 | All services emit `[SVC] event=... key=value` lines | [Appendix A.4](#a4--logs-to-grep-during-the-demo) |
+| R1 | Consistency protocol + DB module | 3 | [books_database/](books_database/), design rationale in [§A.1](#a1--consistency-protocol-design-r1) | verifier checks 7, 8, 16, 17 |
+| R2 | Commitment protocol + new service | 3 | [order_executor/src/app.py](order_executor/src/app.py) `run_2pc`, [payment_service/](payment_service/), design rationale in [§A.2](#a2--commitment-protocol-design-r2--b3) | verifier checks 14, 15 |
+| R3 | Logging | 1 | All services emit `[SVC] event=... key=value` lines | `docker compose logs` after any demo step |
 | R4 | Project organization & docs | 1 | This README + the two diagrams below | (this document) |
 | R5 | Consistency-protocol diagram | 1 | [docs/diagrams/consistency-protocol.svg](docs/diagrams/consistency-protocol.svg) | rendered in [Diagrams](#diagrams) |
 | R6 | Commitment-protocol diagram | 1 | [docs/diagrams/commitment-protocol.svg](docs/diagrams/commitment-protocol.svg) | rendered in [Diagrams](#diagrams) |
 | B1 | Concurrent-writes bonus | 1 | [Bonus B1](#bonus-b1--concurrent-writes) | verifier check 19 ([test_concurrent_writes.py](books_database/tests/test_concurrent_writes.py)) |
 | B2 | Participant-failure recovery bonus | 1 | [Bonus B2](#bonus-b2--participant-failure-recovery) | verifier check 18 ([test_2pc_fail_injection.py](order_executor/tests/test_2pc_fail_injection.py)) plus [test_2pc_crash_recovery.py](order_executor/tests/test_2pc_crash_recovery.py) |
-| B3 | Coordinator-failure analysis bonus | 1 | [Appendix A.2.1–A.2.3](#a21--coordinator-failure-analysis-bonus-b3) | analysis only — read the appendix |
+| B3 | Coordinator-failure analysis bonus | 1 | [§A.2.1–§A.2.3](#a21--coordinator-failure-analysis-bonus-b3) | analysis only — read §A.2.1 below |
 
 The two non-rubric handoff items are tracked outside this README: latest changes are committed on `individual-sten-qy-li`, and the `checkpoint-3` Git tag will be applied to the merge commit on `master` after team-lead review.
 
@@ -92,26 +92,11 @@ The coordinator side complements this in [order_executor/src/app.py](order_execu
 - [order_executor/tests/test_2pc_fail_injection.py](order_executor/tests/test_2pc_fail_injection.py) (verifier check 18) — injects two `Commit` failures on the books_database primary; the third retry succeeds, all 3 replicas converge to `Book A=9`. Pass output contains `PHASE 6 FAIL-INJECTION E2E: PASSED`.
 - [order_executor/tests/test_2pc_crash_recovery.py](order_executor/tests/test_2pc_crash_recovery.py) — `docker kill`s the books_database primary *between* `Prepare` and `Commit`, restarts it without the fail-inject override, and verifies the staged `txn_<id>.json` is reloaded (`recovered_pending` log line) and the retry commit lands. After the test, `books_database/state/3/` contains no leftover `txn_*.json`.
 
-## Repository layout
-
-```
-books_database/        — 3-replica primary-backup KV store; 2PC participant
-order_executor/        — 3-replica execution tier; 2PC coordinator (run_2pc)
-payment_service/       — single-instance 2PC participant
-order_queue/           — FIFO of approved orders
-orchestrator/          — HTTP entry point; CP2 vector-clock launcher
-transaction_verification/, fraud_detection/, suggestions/  — CP2 backends
-frontend/              — browser UI
-scripts/               — checkpoint3-checks.ps1, checkpoint2-checks.ps1
-docs/diagrams/         — CP3 protocol diagrams (R5, R6) and CP2 diagrams
-utils/pb/              — gRPC .proto files and generated stubs
-```
-
 ---
 
-# Appendix
+# Design rationale
 
-The main content above is the rubric-shaped review. Everything below is reference material for a TA who wants to dig deeper into design choices, the B3 analysis, or the carried-over CP2 features.
+The sections below back the rubric table above: §A.1 documents the R1 consistency-protocol choice, and §A.2 documents the R2 commitment-protocol choice plus the B3 coordinator-failure analysis.
 
 ## A.1  Consistency protocol design (R1)
 
@@ -229,66 +214,3 @@ In practice the replacement coordinator lands on the correct outcome by retrying
 2. **Replacement coordinator via bully + durable decision log.** Keep 2PC but make the coordinator side crash-recoverable. The leader writes `decision_<order>.json` *before* phase 2; bully re-elects a new leader on `LEADER_TIMEOUT`; on promotion, the new leader scans for unfinished decisions and resumes phase 2. Participant idempotency (already implemented) makes this safe. Still blocking for ~5s while a new leader is elected, but does not block forever and avoids 3PC's extra round on the happy path. **This is the recommended mitigation for our topology**, exactly the "highest-ID replacement coordinator" pattern from Session 11.
 3. **Cooperative termination.** Participants resolve W4 uncertainty peer-to-peer ("did *you* commit order X?"). Complements rather than replaces a durable decision log — only resolves cases where at least one participant already knows the decision.
 4. **Consensus-based commit (Paxos Commit / Raft).** Replace the single coordinator with a replicated state machine; the decision becomes a consensus value, eliminating the single point of failure. Significantly more code; out of scope for this checkpoint and not required by the rubric.
-
-## A.3  CP2 carry-over: vector clocks and leader election
-
-The Checkpoint 2 features are retained and continue to be exercised by the CP3 `/checkout` flow. The dedicated CP2 verifier at [scripts/checkpoint2-checks.ps1](scripts/checkpoint2-checks.ps1) still passes if the TA wants to run it separately.
-
-### A.3.1  Vector clocks
-
-Three positions in service order `[TV, FD, SUG]`. Event ordering is service-driven, not orchestrator-driven: the orchestrator only kicks off the two root events on `transaction_verification` and blocks on `SUG.AwaitPipelineResult()`; all causal dependencies between later events are enforced by the services through inter-service `ForwardVC` RPCs and per-service causal gates (`_try_run_e()` in FD, `_try_run_g()` in SUG). Per-order `threading.Lock()` in each backend makes the read-modify-write of the local clock atomic against concurrent gRPC threads.
-
-| Step | Service | Event | Vector clock |
-|---|---|---|---|
-| 1 | TV | ValidateUserData | `[1, 0, 0]` |
-| 2 | TV | ValidateItems | `[2, 0, 0]` |
-| 3 | FD | CheckUserFraud | `[1, 1, 0]` |
-| 4 | SUG | PrecomputeSuggestions | `[2, 0, 1]` |
-| 5 | TV | ValidateCardFormat | `[3, 0, 0]` |
-| 6 | FD | CheckCardFraud | `[3, 2, 0]` |
-| 7 | SUG | FinalizeSuggestions | `[3, 2, 2]` |
-
-On failure, the responsible service forwards a `ForwardVC(success=False)` marker so downstream gates short-circuit and the orchestrator returns `"status": "Order Rejected"`.
-
-Diagram: [docs/diagrams/vector-clocks.svg](docs/diagrams/vector-clocks.svg).
-
-### A.3.2  Leader election (executor tier)
-
-Three replicas: `order_executor_1..3`. Bully-style: a replica starts an election if no healthy leader is known, contacts only higher-numbered peers, the highest live executor becomes leader, the leader sends heartbeats, followers start a new election on timeout. Only the current leader calls `Dequeue`, so queue consumption is mutually exclusive.
-
-Diagram: [docs/diagrams/leader-election.svg](docs/diagrams/leader-election.svg).
-
-## A.4  Logs to grep during the demo
-
-```powershell
-$id = "<orderId from /checkout response>"
-docker compose logs --no-color --tail 400 order_executor_1 order_executor_2 order_executor_3 books_database_1 books_database_2 books_database_3 payment_service `
-  | Select-String $id
-```
-
-For one happy-path checkout, expect on the leader executor and the current DB primary:
-
-- `[PAYMENT] prepare_vote_commit order=<id> amount=...`
-- `[DB-X] prepare_vote_commit order=<id> persisted=yes`  ← `persisted=yes` is the B2 hook
-- `[EXEC-Y] 2pc_votes order=<id> db=(vote_commit=True,...) payment=(vote_commit=True,...)`
-- `[EXEC-Y] 2pc_decision order=<id> decision=COMMIT participants=[db,payment]`
-- `[DB-X] commit_applied order=<id> seq=N old=A new=B backups_acked=[...]`
-- `[DB-W] replicate_applied from_primary=X seq=N` (on each backup)
-- `[PAYMENT] commit_applied order=<id>`
-- `[EXEC-Y] 2pc_commit_applied order=<id>`
-
-For an oversold abort:
-
-- `[DB-X] prepare_vote_abort order=<id> reasons=[insufficient_stock ...]`
-- `[EXEC-Y] 2pc_decision order=<id> decision=ABORT participants=[db,payment]`
-- `[DB-X] abort_ok|abort_noop order=<id>` and `[PAYMENT] abort_ok|abort_without_prepare order=<id>`
-
-For CP2 vector-clock evidence, see `event=ForwardVC source=...` on the three CP2 backends and `clear_broadcast_sent final_vc=[...]` on the orchestrator.
-
-## A.5  Known limitations
-
-- The 2PC decision record on the executor is stdout-only, not a durable file. The recommended fix is the durable decision log in [Appendix A.2.3](#a23--solutions-from-the-literature-the-b3-solution-half) item 2.
-- `order_queue` `Dequeue` is destructive with no ack/nack/redelivery; in-flight orders are not automatically redelivered to a new executor leader.
-- Split-brain is not prevented (no quorum fencing on either tier).
-- All non-DB state is in-memory and does not survive a container restart; the books_database `kv_store.json` is the only persisted state besides the `txn_*.json` reservations.
-- The frontend and orchestrator are single-instance services.
