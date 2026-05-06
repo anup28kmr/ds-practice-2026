@@ -2,6 +2,8 @@ import sys
 import os
 import grpc
 from concurrent import futures
+from collections import deque
+import threading
 
 # This set of lines are needed to import the gRPC stubs.
 # The path of the stubs is relative to the current file, or absolute inside the container.
@@ -12,11 +14,7 @@ sys.path.insert(0, order_queue_grpc_path)
 import order_queue_pb2 as order_queue
 import order_queue_pb2_grpc as order_queue_grpc
 
-from collections import deque
-import threading
-
-# In-memory order queue
-# Protected by a lock for thread safety
+# In-memory order queue protected by a lock for thread safety
 queue = deque()
 queue_lock = threading.Lock()
 
@@ -40,7 +38,7 @@ class OrderQueueService(order_queue_grpc.OrderQueueServiceServicer):
         # Acquire lock before modifying the queue
         with queue_lock:
             if len(queue) == 0:
-                print(f"[QUEUE] Dequeue attempted by {request.executor_id} | queue is empty")
+                # Queue is empty return failure silently
                 return order_queue.DequeueResponse(
                     success=False,
                     message="Queue is empty"

@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package books_database;
+
+service BooksDatabaseService {
+    rpc Read (ReadRequest) returns (ReadResponse);
+    rpc Write (WriteRequest) returns (WriteResponse);
+    rpc Prepare (PrepareRequest) returns (PrepareResponse);
+    rpc Commit (CommitRequest) returns (CommitResponse);
+    rpc Abort (AbortRequest) returns (AbortResponse);
+}
+
+message ReadRequest {
+    string book_title = 1;
+}
+
+message ReadResponse {
+    string book_title = 1;
+    int32 stock = 2;
+    bool found = 3;
+}
+
+message WriteRequest {
+    string book_title = 1;
+    int32 stock = 2;
+    string transaction_id = 3;
+    int32 seq = 4;
+}
+
+message WriteResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+message PrepareRequest {
+    string transaction_id = 1;
+    string order_id = 2;
+    string book_title = 3;
+    int32 quantity = 4;
+}
+
+message PrepareResponse {
+    bool ready = 1;
+    string message = 2;
+    int32 new_stock = 3;
+}
+
+message CommitRequest {
+    string transaction_id = 1;
+    string order_id = 2;
+}
+
+message CommitResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+message AbortRequest {
+    string transaction_id = 1;
+    string order_id = 2;
+}
+
+message AbortResponse {
+    bool success = 1;
+}
