@@ -14,17 +14,25 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x15\x66raud_detection.proto\x12\x0f\x66raud_detection\"9\n\x0c\x46raudRequest\x12\x13\n\x0b\x63\x61rd_number\x18\x01 \x01(\t\x12\x14\n\x0corder_amount\x18\x02 \x01(\x02\"!\n\rFraudResponse\x12\x10\n\x08is_fraud\x18\x01 \x01(\x08\x32\x64\n\x15\x46raudDetectionService\x12K\n\nCheckFraud\x12\x1d.fraud_detection.FraudRequest\x1a\x1e.fraud_detection.FraudResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x15\x66raud_detection.proto\x12\x0f\x66raud_detection\"x\n\x10InitOrderRequest\x12\x10\n\x08order_id\x18\x01 \x01(\t\x12\x11\n\tuser_name\x18\x02 \x01(\t\x12\x14\n\x0cuser_contact\x18\x03 \x01(\t\x12\x13\n\x0b\x63\x61rd_number\x18\x04 \x01(\t\x12\x14\n\x0cvector_clock\x18\x05 \x03(\x05\":\n\x11InitOrderResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x14\n\x0cvector_clock\x18\x02 \x03(\x05\";\n\x11\x46raudCheckRequest\x12\x10\n\x08order_id\x18\x01 \x01(\t\x12\x14\n\x0cvector_clock\x18\x02 \x03(\x05\"L\n\x12\x46raudCheckResponse\x12\x10\n\x08is_fraud\x18\x01 \x01(\x08\x12\x0e\n\x06reason\x18\x02 \x01(\t\x12\x14\n\x0cvector_clock\x18\x03 \x03(\x05\";\n\x11\x43learOrderRequest\x12\x10\n\x08order_id\x18\x01 \x01(\t\x12\x14\n\x0cvector_clock\x18\x02 \x03(\x05\"%\n\x12\x43learOrderResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x32\x88\x03\n\x15\x46raudDetectionService\x12R\n\tInitOrder\x12!.fraud_detection.InitOrderRequest\x1a\".fraud_detection.InitOrderResponse\x12`\n\x15\x43heckUserDataForFraud\x12\".fraud_detection.FraudCheckRequest\x1a#.fraud_detection.FraudCheckResponse\x12\x62\n\x17\x43heckCreditCardForFraud\x12\".fraud_detection.FraudCheckRequest\x1a#.fraud_detection.FraudCheckResponse\x12U\n\nClearOrder\x12\".fraud_detection.ClearOrderRequest\x1a#.fraud_detection.ClearOrderResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'fraud_detection_pb2', _globals)
 if _descriptor._USE_C_DESCRIPTORS == False:
   DESCRIPTOR._options = None
-  _globals['_FRAUDREQUEST']._serialized_start=42
-  _globals['_FRAUDREQUEST']._serialized_end=99
-  _globals['_FRAUDRESPONSE']._serialized_start=101
-  _globals['_FRAUDRESPONSE']._serialized_end=134
-  _globals['_FRAUDDETECTIONSERVICE']._serialized_start=136
-  _globals['_FRAUDDETECTIONSERVICE']._serialized_end=236
+  _globals['_INITORDERREQUEST']._serialized_start=42
+  _globals['_INITORDERREQUEST']._serialized_end=162
+  _globals['_INITORDERRESPONSE']._serialized_start=164
+  _globals['_INITORDERRESPONSE']._serialized_end=222
+  _globals['_FRAUDCHECKREQUEST']._serialized_start=224
+  _globals['_FRAUDCHECKREQUEST']._serialized_end=283
+  _globals['_FRAUDCHECKRESPONSE']._serialized_start=285
+  _globals['_FRAUDCHECKRESPONSE']._serialized_end=361
+  _globals['_CLEARORDERREQUEST']._serialized_start=363
+  _globals['_CLEARORDERREQUEST']._serialized_end=422
+  _globals['_CLEARORDERRESPONSE']._serialized_start=424
+  _globals['_CLEARORDERRESPONSE']._serialized_end=461
+  _globals['_FRAUDDETECTIONSERVICE']._serialized_start=464
+  _globals['_FRAUDDETECTIONSERVICE']._serialized_end=856
 # @@protoc_insertion_point(module_scope)

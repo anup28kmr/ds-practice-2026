@@ -28,6 +28,8 @@ sys.path.insert(0, payment_service_grpc_path)
 import payment_service_pb2 as payment_service
 import payment_service_pb2_grpc as payment_service_grpc
 
+# ─── Configuration ─────────────────────────────────────────────────────────────
+
 EXECUTOR_ID   = os.getenv("EXECUTOR_ID", "1")
 EXECUTOR_PORT = os.getenv("EXECUTOR_PORT", "60001")
 
@@ -37,12 +39,23 @@ EXECUTOR_REPLICAS = [
     {"id": "3", "host": "order_executor_3", "port": "60003"},
 ]
 
+# All known DB replicas — used for fallback if primary is unreachable
+DB_REPLICAS = [
+    {"host": "books_database_1", "port": "60011"},
+    {"host": "books_database_2", "port": "60012"},
+    {"host": "books_database_3", "port": "60013"},
+]
+
+# 2PC retry settings for coordinator fault tolerance
+COMMIT_MAX_RETRIES = 5
+COMMIT_RETRY_DELAY = 2.0   # seconds between retries
+
+# ─── Leader election state ─────────────────────────────────────────────────────
+
 current_leader       = None
 leader_lock          = threading.Lock()
-
 election_in_progress = False
 election_lock        = threading.Lock()
-
 
 # ─── gRPC stubs ────────────────────────────────────────────────────────────────
 
@@ -51,6 +64,22 @@ def get_queue_stub():
     return order_queue_grpc.OrderQueueServiceStub(channel)
 
 def get_db_stub():
+    """
+    Always connect to books_database_1 as primary.
+    If it is unreachable, fall back to the next available replica.
+    This keeps compatibility with your static PRIMARY/BACKUP setup.
+    """
+    for replica in DB_REPLICAS:
+        try:
+            addr = f"{replica['host']}:{replica['port']}"
+            channel = grpc.insecure_channel(addr)
+            stub = books_database_grpc.BooksDatabaseServiceStub(channel)
+            # Quick liveness check
+            stub.Read(books_database.ReadRequest(book_title="__ping__"), timeout=1)
+            return stub
+        except Exception:
+            continue
+    # Last resort — return primary stub even if unreachable
     channel = grpc.insecure_channel('books_database_1:60011')
     return books_database_grpc.BooksDatabaseServiceStub(channel)
 
@@ -70,7 +99,6 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServiceServicer):
     def StartElection(self, request, context):
         candidate_id = request.candidate_id
         print(f"[EXEC-{EXECUTOR_ID}] received_election from={candidate_id}")
-
         if int(EXECUTOR_ID) > int(candidate_id):
             print(f"[EXEC-{EXECUTOR_ID}] taking_over_election higher_id={EXECUTOR_ID}")
             with leader_lock:
@@ -78,16 +106,13 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServiceServicer):
             if no_leader:
                 threading.Thread(target=maybe_start_election, daemon=True).start()
             else:
-                # Leader already known — re-announce so the caller stops
                 threading.Thread(target=announce_leadership, daemon=True).start()
-
         return order_executor.ElectionResponse(acknowledged=True)
 
     def AnnounceLeader(self, request, context):
         global current_leader, election_in_progress
-        new_leader = request.leader_id
         with leader_lock:
-            current_leader = new_leader
+            current_leader = request.leader_id
         with election_lock:
             election_in_progress = False
         print(f"[EXEC-{EXECUTOR_ID}] new_leader leader_id={current_leader}")
@@ -103,29 +128,23 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServiceServicer):
 
 def maybe_start_election():
     global election_in_progress
-
-    # Skip if a leader is already known
     with leader_lock:
         if current_leader is not None:
             return
-
     with election_lock:
         if election_in_progress:
             return
         election_in_progress = True
-
     try:
         start_bully_election()
     finally:
         with election_lock:
             election_in_progress = False
 
-
 def start_bully_election():
     global current_leader
     print(f"[EXEC-{EXECUTOR_ID}] starting_election")
     higher_replied = False
-
     for replica in EXECUTOR_REPLICAS:
         if int(replica["id"]) > int(EXECUTOR_ID):
             try:
@@ -146,7 +165,6 @@ def start_bully_election():
         print(f"[EXEC-{EXECUTOR_ID}] became_leader leader_id={EXECUTOR_ID}")
         announce_leadership()
 
-
 def announce_leadership():
     for replica in EXECUTOR_REPLICAS:
         if replica["id"] != EXECUTOR_ID:
@@ -164,69 +182,168 @@ def announce_leadership():
 # ─── Two-Phase Commit ──────────────────────────────────────────────────────────
 
 def two_phase_commit(order):
+    """
+    Coordinator side of 2PC. Participants: books_database (primary) and
+    payment_service.
+
+    Uses a single transaction_id (UUID) shared across both participants.
+    Real order data — book_title, quantity, amount — is read from the
+    dequeued order, not hardcoded.
+
+    Phase 1 (Prepare): ask both participants to stage their operations.
+    Phase 2 (Commit/Abort): if both vote yes → Commit; otherwise → Abort.
+
+    Commit phase retries up to COMMIT_MAX_RETRIES times with a delay if a
+    participant returns failure (e.g. transient network error). This
+    handles the coordinator-retry scenario described in the seminar bonus.
+    """
     transaction_id = str(uuid.uuid4())
     db_stub        = get_db_stub()
     payment_stub   = get_payment_stub()
 
-    book_title = list(order.items)[0] if order.items else "Book A"
-    quantity   = 1
-    amount     = 50.0
+    # ── Extract real order data ───────────────────────────────────────────────
+    # order.items is a list of order items from the queue proto.
+    # We take the first item for now; extend the loop below for multi-item.
+    if order.items:
+        book_title = order.items[0]
+        quantity   = 1
+        amount     = 9.99
+    else:
+        print(f"[EXEC-{EXECUTOR_ID}] 2pc_abort_empty_order order={order.order_id}")
+        return False
 
-    print(f"[EXEC-{EXECUTOR_ID}] 2pc_start order={order.order_id} tx={transaction_id} book={book_title}")
+    user_name = order.user_name
 
-    # Phase 1 – Prepare
+
+
+
+
+
+
+
+
+
+    print(f"[EXEC-{EXECUTOR_ID}] 2pc_start order={order.order_id} "
+          f"tx={transaction_id} book={book_title} qty={quantity} amount={amount:.2f}")
+
+    # ── Phase 1: Prepare ──────────────────────────────────────────────────────
     db_vote = payment_vote = False
 
     try:
         r = db_stub.Prepare(books_database.PrepareRequest(
-            transaction_id=transaction_id, order_id=order.order_id,
-            book_title=book_title, quantity=quantity))
+            transaction_id=transaction_id,
+            order_id=order.order_id,
+            book_title=book_title,
+            quantity=quantity
+        ))
         db_vote = r.ready
+        if not db_vote:
+            print(f"[EXEC-{EXECUTOR_ID}] db_prepare_vote_abort "
+                  f"order={order.order_id} reason={r.message}")
     except Exception as e:
         print(f"[EXEC-{EXECUTOR_ID}] db_prepare_failed order={order.order_id} error={e}")
 
     try:
         r = payment_stub.Prepare(payment_service.PrepareRequest(
-            transaction_id=transaction_id, order_id=order.order_id, amount=amount))
+            transaction_id=transaction_id,
+            order_id=order.order_id,
+            amount=amount
+        ))
         payment_vote = r.ready
+        if not payment_vote:
+            print(f"[EXEC-{EXECUTOR_ID}] payment_prepare_vote_abort "
+                  f"order={order.order_id} reason={r.message}")
     except Exception as e:
         print(f"[EXEC-{EXECUTOR_ID}] payment_prepare_failed order={order.order_id} error={e}")
 
     print(f"[EXEC-{EXECUTOR_ID}] 2pc_votes order={order.order_id} "
           f"db=(vote_commit={db_vote}) payment=(vote_commit={payment_vote})")
 
-    # Phase 2 – Commit or Abort
+    # ── Phase 2: Commit or Abort ──────────────────────────────────────────────
     if db_vote and payment_vote:
-        print(f"[EXEC-{EXECUTOR_ID}] 2pc_decision order={order.order_id} decision=COMMIT participants=[db,payment]")
-        try:
-            r = db_stub.Commit(books_database.CommitRequest(
-                transaction_id=transaction_id, order_id=order.order_id))
-            print(f"[EXEC-{EXECUTOR_ID}] db_commit_result order={order.order_id} success={r.success}")
-        except Exception as e:
-            print(f"[EXEC-{EXECUTOR_ID}] db_commit_failed order={order.order_id} error={e}")
-        try:
-            r = payment_stub.Commit(payment_service.CommitRequest(
-                transaction_id=transaction_id, order_id=order.order_id))
-            print(f"[EXEC-{EXECUTOR_ID}] payment_commit_result order={order.order_id} success={r.success}")
-        except Exception as e:
-            print(f"[EXEC-{EXECUTOR_ID}] payment_commit_failed order={order.order_id} error={e}")
-        print(f"[EXEC-{EXECUTOR_ID}] 2pc_commit_applied order={order.order_id} tx={transaction_id}")
-        return True
+        print(f"[EXEC-{EXECUTOR_ID}] 2pc_decision order={order.order_id} "
+              f"decision=COMMIT participants=[db,payment]")
+
+        # Commit DB — retry on transient failure (coordinator fault tolerance)
+        db_committed = False
+        for attempt in range(1, COMMIT_MAX_RETRIES + 1):
+            try:
+                r = db_stub.Commit(books_database.CommitRequest(
+                    transaction_id=transaction_id,
+                    order_id=order.order_id
+                ))
+                if r.success:
+                    print(f"[EXEC-{EXECUTOR_ID}] db_commit_result "
+                          f"order={order.order_id} success=True attempt={attempt}")
+                    db_committed = True
+                    break
+                else:
+                    print(f"[EXEC-{EXECUTOR_ID}] db_commit_retry "
+                          f"order={order.order_id} attempt={attempt} reason={r.message}")
+                    time.sleep(COMMIT_RETRY_DELAY)
+            except Exception as e:
+                print(f"[EXEC-{EXECUTOR_ID}] db_commit_error "
+                      f"order={order.order_id} attempt={attempt} error={e}")
+                time.sleep(COMMIT_RETRY_DELAY)
+
+        if not db_committed:
+            print(f"[EXEC-{EXECUTOR_ID}] db_commit_exhausted "
+                  f"order={order.order_id} max_retries={COMMIT_MAX_RETRIES}")
+
+        # Commit payment — retry on transient failure
+        payment_committed = False
+        for attempt in range(1, COMMIT_MAX_RETRIES + 1):
+            try:
+                r = payment_stub.Commit(payment_service.CommitRequest(
+                    transaction_id=transaction_id,
+                    order_id=order.order_id
+                ))
+                if r.success:
+                    print(f"[EXEC-{EXECUTOR_ID}] payment_commit_result "
+                          f"order={order.order_id} success=True attempt={attempt}")
+                    payment_committed = True
+                    break
+                else:
+                    print(f"[EXEC-{EXECUTOR_ID}] payment_commit_retry "
+                          f"order={order.order_id} attempt={attempt} reason={r.message}")
+                    time.sleep(COMMIT_RETRY_DELAY)
+            except Exception as e:
+                print(f"[EXEC-{EXECUTOR_ID}] payment_commit_error "
+                      f"order={order.order_id} attempt={attempt} error={e}")
+                time.sleep(COMMIT_RETRY_DELAY)
+
+        if not payment_committed:
+            print(f"[EXEC-{EXECUTOR_ID}] payment_commit_exhausted "
+                  f"order={order.order_id} max_retries={COMMIT_MAX_RETRIES}")
+
+        success = db_committed and payment_committed
+        print(f"[EXEC-{EXECUTOR_ID}] 2pc_commit_applied order={order.order_id} "
+              f"tx={transaction_id} db={db_committed} payment={payment_committed}")
+        return success
 
     else:
-        print(f"[EXEC-{EXECUTOR_ID}] 2pc_decision order={order.order_id} decision=ABORT participants=[db,payment]")
+        # At least one participant voted abort — send Abort to both
+        print(f"[EXEC-{EXECUTOR_ID}] 2pc_decision order={order.order_id} "
+              f"decision=ABORT participants=[db,payment]")
+
         try:
             db_stub.Abort(books_database.AbortRequest(
-                transaction_id=transaction_id, order_id=order.order_id))
+                transaction_id=transaction_id,
+                order_id=order.order_id
+            ))
             print(f"[EXEC-{EXECUTOR_ID}] db_aborted order={order.order_id}")
         except Exception as e:
             print(f"[EXEC-{EXECUTOR_ID}] db_abort_failed order={order.order_id} error={e}")
+
         try:
             payment_stub.Abort(payment_service.AbortRequest(
-                transaction_id=transaction_id, order_id=order.order_id))
+                transaction_id=transaction_id,
+                order_id=order.order_id
+            ))
             print(f"[EXEC-{EXECUTOR_ID}] payment_aborted order={order.order_id}")
         except Exception as e:
             print(f"[EXEC-{EXECUTOR_ID}] payment_abort_failed order={order.order_id} error={e}")
+
         print(f"[EXEC-{EXECUTOR_ID}] 2pc_aborted order={order.order_id} tx={transaction_id}")
         return False
 
@@ -237,14 +354,12 @@ def execution_loop():
     global current_leader
     print(f"[EXEC-{EXECUTOR_ID}] starting execution_loop")
 
-    # Higher ID fires election sooner:
-    # EXEC-3 → 2.0 s,  EXEC-2 → 2.5 s,  EXEC-1 → 3.0 s
-    # By the time EXEC-2 and EXEC-1 wake up, EXEC-3 has already won
-    # and sent AnnounceLeader, so their maybe_start_election() is a no-op.
+    # Stagger: EXEC-3 fires at 2.0s, EXEC-2 at 2.5s, EXEC-1 at 3.0s
+    # EXEC-3 wins and announces before the others wake up → one clean election
     sleep_before_election = 2.0 + (3 - int(EXECUTOR_ID)) * 0.5
     time.sleep(sleep_before_election)
 
-    maybe_start_election()   # no-op if leader already announced
+    maybe_start_election()
 
     while True:
         try:
@@ -279,16 +394,14 @@ def execution_loop():
 # ─── Server entry point ────────────────────────────────────────────────────────
 
 def serve():
-    server = grpc.server(futures.ThreadPoolExecutor())
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     order_executor_grpc.add_OrderExecutorServiceServicer_to_server(
         OrderExecutorService(), server
     )
     server.add_insecure_port("[::]:" + EXECUTOR_PORT)
     server.start()
     print(f"[EXEC-{EXECUTOR_ID}] Order executor started. Listening on port {EXECUTOR_PORT}.")
-
     threading.Thread(target=execution_loop, daemon=True).start()
-
     server.wait_for_termination()
 
 

@@ -1,75 +1,141 @@
 import sys
 import os
 import grpc
+import threading
 from concurrent import futures
 
-# This set of lines are needed to import the gRPC stubs.
-# The path of the stubs is relative to the current file, or absolute inside the container.
-# Change these lines only if strictly needed.
 FILE = __file__ if '__file__' in globals() else os.getenv("PYTHONFILE", "")
 payment_service_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/payment_service'))
 sys.path.insert(0, payment_service_grpc_path)
 import payment_service_pb2 as payment_service
 import payment_service_pb2_grpc as payment_service_grpc
 
-# Pending transactions store for 2PC
-# { transaction_id: { order_id, amount } }
+# Thread lock — protects all shared state from concurrent RPC handlers
+state_lock = threading.Lock()
+
+# Pending transactions: { transaction_id: { order_id, amount } }
 pending_transactions = {}
 
-# Create a class to define the server functions, derived from
-# payment_service_pb2_grpc.PaymentServiceServicer
+# Idempotency tracking sets
+committed_orders = set()   # order_ids fully committed
+aborted_orders   = set()   # order_ids aborted
+
+
 class PaymentService(payment_service_grpc.PaymentServiceServicer):
 
-    # Create an RPC function for 2PC Phase 1 - Prepare
-    # Stage the payment without executing
     def Prepare(self, request, context):
-        pending_transactions[request.transaction_id] = {
-            "order_id": request.order_id,
-            "amount": request.amount
-        }
-        print(f"[PAYMENT] prepare_vote_commit order={request.order_id} amount={request.amount} tx={request.transaction_id}")
+        """
+        Phase 1 of 2PC. Stage the payment amount and vote commit.
+        Always votes commit (dummy service — no real card processing).
+        Idempotent: replaying Prepare for an already-staged transaction
+        returns vote_commit=True without re-staging.
+        """
+        order_id       = request.order_id
+        transaction_id = request.transaction_id
+        amount         = request.amount
+
+        with state_lock:
+            # Already staged — idempotent re-prepare
+            if transaction_id in pending_transactions:
+                print(f"[PAYMENT] prepare_idempotent order={order_id} tx={transaction_id}")
+                return payment_service.PrepareResponse(
+                    ready=True, message="already prepared"
+                )
+            # Already committed — coordinator may be replaying after crash
+            if order_id in committed_orders:
+                print(f"[PAYMENT] prepare_already_committed order={order_id}")
+                return payment_service.PrepareResponse(
+                    ready=True, message="already committed"
+                )
+            # Already aborted
+            if order_id in aborted_orders:
+                print(f"[PAYMENT] prepare_already_aborted order={order_id}")
+                return payment_service.PrepareResponse(
+                    ready=False, message="already aborted"
+                )
+
+            pending_transactions[transaction_id] = {
+                "order_id": order_id,
+                "amount":   amount,
+            }
+
+        print(f"[PAYMENT] prepare_vote_commit order={order_id} "
+              f"amount={amount:.2f} tx={transaction_id}")
         return payment_service.PrepareResponse(
-            ready=True,
-            message="Payment ready to commit"
+            ready=True, message="Payment ready to commit"
         )
 
-    # Create an RPC function for 2PC Phase 2 - Commit
-    # Execute the staged payment
     def Commit(self, request, context):
-        tx = pending_transactions.pop(request.transaction_id, None)
-        if not tx:
-            return payment_service.CommitResponse(success=False, message="Transaction not found")
+        """
+        Phase 2 commit. Execute the dummy payment and record as committed.
+        Idempotent: a second Commit for the same order returns success
+        immediately without re-processing. A Commit that arrives without
+        a matching Prepare is still accepted — the decision record lives
+        on the coordinator, not here.
+        """
+        order_id       = request.order_id
+        transaction_id = request.transaction_id
 
-        # Dummy payment execution
-        print(f"[PAYMENT] commit_applied order={tx['order_id']} amount={tx['amount']} tx={request.transaction_id}")
+        with state_lock:
+            # Already committed — safe no-op for coordinator retries
+            if order_id in committed_orders:
+                print(f"[PAYMENT] commit_idempotent order={order_id} tx={transaction_id}")
+                return payment_service.CommitResponse(
+                    success=True, message="already committed"
+                )
+
+            tx = pending_transactions.pop(transaction_id, None)
+            committed_orders.add(order_id)
+
+        if tx is None:
+            # Commit without a matching Prepare (coordinator retry after failover)
+            # Accept it — coordinator is authoritative on the decision
+            print(f"[PAYMENT] commit_without_prepare order={order_id} tx={transaction_id} (accepted)")
+        else:
+            print(f"[PAYMENT] commit_applied order={order_id} "
+                  f"amount={tx['amount']:.2f} tx={transaction_id}")
+
         return payment_service.CommitResponse(
-            success=True,
-            message="Payment committed successfully"
+            success=True, message="Payment committed successfully"
         )
 
-    # Create an RPC function for 2PC Phase 2 - Abort
-    # Discard the staged payment
     def Abort(self, request, context):
-        tx = pending_transactions.pop(request.transaction_id, None)
-        if tx:
-            print(f"[PAYMENT] abort_ok order={tx['order_id']} tx={request.transaction_id}")
+        """
+        Phase 2 abort. Discard the staged payment. Fully idempotent —
+        aborting an unknown or already-aborted order is a silent no-op.
+        """
+        order_id       = request.order_id
+        transaction_id = request.transaction_id
+
+        with state_lock:
+            # Already aborted — idempotent
+            if order_id in aborted_orders:
+                print(f"[PAYMENT] abort_idempotent order={order_id} tx={transaction_id}")
+                return payment_service.AbortResponse(success=True)
+
+            tx = pending_transactions.pop(transaction_id, None)
+            aborted_orders.add(order_id)
+
+        if tx is None:
+            print(f"[PAYMENT] abort_without_prepare order={order_id} tx={transaction_id}")
         else:
-            print(f"[PAYMENT] abort_without_prepare tx={request.transaction_id}")
+            print(f"[PAYMENT] abort_ok order={order_id} "
+                  f"amount={tx['amount']:.2f} tx={transaction_id}")
+
         return payment_service.AbortResponse(success=True)
 
+
 def serve():
-    # Create a gRPC server
-    server = grpc.server(futures.ThreadPoolExecutor())
-    # Add PaymentService
-    payment_service_grpc.add_PaymentServiceServicer_to_server(PaymentService(), server)
-    # Listen on port 60020
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+    payment_service_grpc.add_PaymentServiceServicer_to_server(
+        PaymentService(), server
+    )
     port = "60020"
     server.add_insecure_port("[::]:" + port)
-    # Start the server
     server.start()
-    print("Payment service started. Listening on port 60020.")
-    # Keep thread alive
+    print(f"Payment service started. Listening on port {port}.")
     server.wait_for_termination()
+
 
 if __name__ == '__main__':
     serve()
