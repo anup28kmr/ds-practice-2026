@@ -1,4 +1,0 @@
-services:
-  books_database_3:
-    environment:
-      - FAIL_NEXT_COMMIT=2

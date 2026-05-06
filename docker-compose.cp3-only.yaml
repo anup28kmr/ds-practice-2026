@@ -1,4 +1,0 @@
-services:
-  orchestrator:
-    environment:
-      - CP3_EXECUTION_ONLY=true
