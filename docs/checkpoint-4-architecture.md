@@ -111,5 +111,4 @@ CP3 ended at f33f8da with 13 services. CP4 adds **one** new service
 (`observability`) on top, plus telemetry hooks in four of the existing
 services (orchestrator, order_executor, books_database, payment_service).
 The dataplane (`/checkout` → orchestrator → backends → queue → executor →
-2PC → DB + payment) is unchanged. See [README.md](../README.md) for the
-CP3 design rationale.
+2PC → DB + payment) is unchanged from CP3.

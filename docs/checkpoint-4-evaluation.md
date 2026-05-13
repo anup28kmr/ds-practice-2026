@@ -154,9 +154,10 @@ tier is therefore an availability dial, not a throughput dial.
 
 ### What about DB replicas?
 
-We did not run a separate 1-DB-replica experiment because synchronous
-primary-backup blocks until *every live backup* acks (see CP3 §A.1.5
-in [README.md](../README.md)). Reducing to one DB removes the blocking
+We did not run a separate 1-DB-replica experiment because the
+consistency protocol is synchronous primary-backup: the primary
+blocks on `Write` and on 2PC `Commit` until *every live backup* has
+acked the replicate. Reducing to one DB removes the blocking
 replication, so a 1-DB stack should commit visibly faster — but the
 durability + failover guarantees that the rubric grades both vanish.
 Recommendation matches the current configuration: **3 DB replicas**
