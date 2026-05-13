@@ -1,4 +1,22 @@
 services:
+  observability:
+    # All-in-one Grafana OTEL-LGTM image (Grafana + Prometheus + Tempo + Loki +
+    # OTel Collector). Per Guide14 the OTLP HTTP receiver is on 4318 and the
+    # UI on 3000. The CP4 dashboard is provisioned from docs/grafana so it
+    # loads without a manual import at demo time.
+    image: grafana/otel-lgtm:0.11.0
+    ports:
+      - "3000:3000"
+      - "4317:4317"
+      - "4318:4318"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+    volumes:
+      - ./docs/grafana/dashboards:/otel-lgtm/grafana/conf/provisioning/dashboards-cp4:ro
+      - ./docs/grafana/provisioning/dashboards:/otel-lgtm/grafana/conf/provisioning/dashboards:ro
+
   frontend:
     build:
       context: ./
@@ -32,7 +50,7 @@ services:
       context: ./
       dockerfile: ./fraud_detection/Dockerfile
     ports:
-      - "50251:50051"
+      - "51251:50051"
     environment:
       - PYTHONUNBUFFERED=TRUE
       - PYTHONFILE=/app/fraud_detection/src/app.py
@@ -46,7 +64,7 @@ services:
       context: ./
       dockerfile: ./transaction_verification/Dockerfile
     ports:
-      - "50252:50052"
+      - "51252:50052"
     environment:
       - PYTHONUNBUFFERED=TRUE
       - PYTHONFILE=/app/transaction_verification/src/app.py
@@ -60,7 +78,7 @@ services:
       context: ./
       dockerfile: ./suggestions/Dockerfile
     ports:
-      - "50253:50053"
+      - "51253:50053"
     environment:
       - PYTHONUNBUFFERED=TRUE
       - PYTHONFILE=/app/suggestions/src/app.py
@@ -74,7 +92,7 @@ services:
       context: ./
       dockerfile: ./order_queue/Dockerfile
     ports:
-      - "50254:50054"
+      - "51254:50054"
     environment:
       - PYTHONUNBUFFERED=TRUE
       - PYTHONFILE=/app/order_queue/src/app.py
@@ -87,13 +105,14 @@ services:
       context: ./
       dockerfile: ./order_executor/Dockerfile
     ports:
-      - "50255:50055"
+      - "51255:50055"
     environment:
       - PYTHONUNBUFFERED=TRUE
       - PYTHONFILE=/app/order_executor/src/app.py
       - EXECUTOR_ID=1
       - EXECUTOR_PORT=50055
       - PEERS=1@order_executor_1:50055,2@order_executor_2:50055,3@order_executor_3:50055
+      - PYTHONPATH=/app
     volumes:
       - ./utils:/app/utils
       - ./order_executor/src:/app/order_executor/src
@@ -109,13 +128,14 @@ services:
       context: ./
       dockerfile: ./order_executor/Dockerfile
     ports:
-      - "50256:50055"
+      - "51256:50055"
     environment:
       - PYTHONUNBUFFERED=TRUE
       - PYTHONFILE=/app/order_executor/src/app.py
       - EXECUTOR_ID=2
       - EXECUTOR_PORT=50055
       - PEERS=1@order_executor_1:50055,2@order_executor_2:50055,3@order_executor_3:50055
+      - PYTHONPATH=/app
     volumes:
       - ./utils:/app/utils
       - ./order_executor/src:/app/order_executor/src
@@ -131,13 +151,14 @@ services:
       context: ./
       dockerfile: ./order_executor/Dockerfile
     ports:
-      - "50257:50055"
+      - "51257:50055"
     environment:
       - PYTHONUNBUFFERED=TRUE
       - PYTHONFILE=/app/order_executor/src/app.py
       - EXECUTOR_ID=3
       - EXECUTOR_PORT=50055
       - PEERS=1@order_executor_1:50055,2@order_executor_2:50055,3@order_executor_3:50055
+      - PYTHONPATH=/app
     volumes:
       - ./utils:/app/utils
       - ./order_executor/src:/app/order_executor/src
@@ -153,7 +174,7 @@ services:
       context: ./
       dockerfile: ./payment_service/Dockerfile
     ports:
-      - "50261:50061"
+      - "51261:50061"
     environment:
       - PYTHONUNBUFFERED=TRUE
       - PYTHONFILE=/app/payment_service/src/app.py
@@ -168,7 +189,7 @@ services:
       context: ./
       dockerfile: ./books_database/Dockerfile
     ports:
-      - "50258:50058"
+      - "51258:50058"
     environment:
       - PYTHONUNBUFFERED=TRUE
       - PYTHONFILE=/app/books_database/src/app.py
@@ -187,7 +208,7 @@ services:
       context: ./
       dockerfile: ./books_database/Dockerfile
     ports:
-      - "50259:50058"
+      - "51259:50058"
     environment:
       - PYTHONUNBUFFERED=TRUE
       - PYTHONFILE=/app/books_database/src/app.py
@@ -206,7 +227,7 @@ services:
       context: ./
       dockerfile: ./books_database/Dockerfile
     ports:
-      - "50260:50058"
+      - "51260:50058"
     environment:
       - PYTHONUNBUFFERED=TRUE
       - PYTHONFILE=/app/books_database/src/app.py

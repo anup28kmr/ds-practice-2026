@@ -17,6 +17,9 @@ sys.path.insert(0, db_grpc_path)
 import books_database_pb2 as db_pb2
 import books_database_pb2_grpc as db_grpc
 
+from utils.telemetry import init_telemetry
+from opentelemetry.metrics import Observation
+
 
 REPLICA_ID = int(os.getenv("REPLICA_ID", "1"))
 REPLICA_PORT = os.getenv("REPLICA_PORT", "50058")
@@ -113,6 +116,42 @@ pending_orders = {}
 # number of orders processed this container lifetime -- fine for a demo).
 committed_orders = set()
 aborted_orders = set()
+
+
+# --- OpenTelemetry (Checkpoint 4) ---
+# Two async gauges read `len(kv_store)` and `len(pending_orders)` once per
+# export interval (default 10 s) so the dashboard can show how many keys are
+# tracked vs. how many 2PC reservations are open without a per-write counter.
+_tracer, _meter = init_telemetry(f"books_database_{REPLICA_ID}")
+_db_writes_total = _meter.create_counter(
+    "db_writes_total",
+    description="Successful primary-side writes (CP3 Write + 2PC Commit)",
+)
+_db_write_latency = _meter.create_histogram(
+    "db_write_latency_seconds",
+    description="Wall-clock latency of primary-side Write RPCs",
+    unit="s",
+)
+
+
+def _observe_kv_keys(_options):
+    return [Observation(len(kv_store), {"replica_id": str(REPLICA_ID)})]
+
+
+def _observe_pending(_options):
+    return [Observation(len(pending_orders), {"replica_id": str(REPLICA_ID)})]
+
+
+_meter.create_observable_gauge(
+    "db_kv_store_keys",
+    callbacks=[_observe_kv_keys],
+    description="Number of unique book titles currently stored on this replica",
+)
+_meter.create_observable_gauge(
+    "db_pending_orders",
+    callbacks=[_observe_pending],
+    description="Number of 2PC orders currently in the prepared/pending set on this replica",
+)
 
 
 def _txn_file(order_id):
@@ -452,53 +491,72 @@ class BooksDatabaseService(db_grpc.BooksDatabaseServiceServicer):
 
     def Write(self, request, context):
         global seq_counter
+        _write_start = time.time()
+        with _tracer.start_as_current_span("db_write") as _span:
+            _span.set_attribute("db.title", request.title)
+            _span.set_attribute("db.new_quantity", request.quantity)
 
-        with state_lock:
-            if not is_leader:
-                msg = f"not primary; primary={leader_id}"
-                print(
-                    f"[DB-{REPLICA_ID}] write_rejected "
-                    f"title=\"{request.title}\" reason={msg}"
+            with state_lock:
+                if not is_leader:
+                    msg = f"not primary; primary={leader_id}"
+                    print(
+                        f"[DB-{REPLICA_ID}] write_rejected "
+                        f"title=\"{request.title}\" reason={msg}"
+                    )
+                    _span.set_attribute("outcome", "rejected_not_primary")
+                    _db_write_latency.record(
+                        time.time() - _write_start,
+                        {"outcome": "rejected_not_primary"},
+                    )
+                    return db_pb2.WriteResponse(success=False, message=msg)
+
+            # Per-key lock: concurrent writes on the *same* title serialize here
+            # while concurrent writes on *different* titles run in parallel.
+            key_lock = get_key_lock(request.title)
+            with key_lock:
+                with kv_state_lock:
+                    old = kv_store.get(request.title)
+
+                with seq_lock:
+                    seq_counter += 1
+                    seq = seq_counter
+
+                acked, missing = replicate_to_backups(
+                    request.title, request.quantity, seq
                 )
-                return db_pb2.WriteResponse(success=False, message=msg)
 
-        # Per-key lock: concurrent writes on the *same* title serialize here
-        # while concurrent writes on *different* titles run in parallel.
-        key_lock = get_key_lock(request.title)
-        with key_lock:
-            with kv_state_lock:
-                old = kv_store.get(request.title)
+                if missing:
+                    print(
+                        f"[DB-{REPLICA_ID}] write_failed "
+                        f"title=\"{request.title}\" seq={seq} "
+                        f"old={old} new={request.quantity} "
+                        f"acked={acked} missing={missing}"
+                    )
+                    _span.set_attribute("outcome", "replication_failed")
+                    _db_write_latency.record(
+                        time.time() - _write_start,
+                        {"outcome": "replication_failed"},
+                    )
+                    return db_pb2.WriteResponse(
+                        success=False,
+                        message=f"replication incomplete; missing backups {missing}",
+                    )
 
-            with seq_lock:
-                seq_counter += 1
-                seq = seq_counter
+                with kv_state_lock:
+                    kv_store[request.title] = request.quantity
+                persist_kv_store()
 
-            acked, missing = replicate_to_backups(
-                request.title, request.quantity, seq
+            print(
+                f"[DB-{REPLICA_ID}] write_committed primary={REPLICA_ID} "
+                f"title=\"{request.title}\" seq={seq} "
+                f"old={old} new={request.quantity} backups_acked={acked}"
             )
-
-            if missing:
-                print(
-                    f"[DB-{REPLICA_ID}] write_failed "
-                    f"title=\"{request.title}\" seq={seq} "
-                    f"old={old} new={request.quantity} "
-                    f"acked={acked} missing={missing}"
-                )
-                return db_pb2.WriteResponse(
-                    success=False,
-                    message=f"replication incomplete; missing backups {missing}",
-                )
-
-            with kv_state_lock:
-                kv_store[request.title] = request.quantity
-            persist_kv_store()
-
-        print(
-            f"[DB-{REPLICA_ID}] write_committed primary={REPLICA_ID} "
-            f"title=\"{request.title}\" seq={seq} "
-            f"old={old} new={request.quantity} backups_acked={acked}"
-        )
-        return db_pb2.WriteResponse(success=True, message="ok")
+            _span.set_attribute("outcome", "committed")
+            _db_writes_total.add(1, {"replica_id": str(REPLICA_ID)})
+            _db_write_latency.record(
+                time.time() - _write_start, {"outcome": "committed"}
+            )
+            return db_pb2.WriteResponse(success=True, message="ok")
 
     # Internal RPCs.
 
@@ -735,6 +793,7 @@ class BooksDatabaseService(db_grpc.BooksDatabaseServiceServicer):
                 with kv_state_lock:
                     kv_store[title] = new_value
                 applied.append((title, old, new_value, seq, acked))
+                _db_writes_total.add(1, {"replica_id": str(REPLICA_ID), "path": "2pc_commit"})
 
             del pending_orders[order_id]
             committed_orders.add(order_id)

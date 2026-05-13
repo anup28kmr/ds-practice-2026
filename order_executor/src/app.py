@@ -34,6 +34,9 @@ import books_database_pb2_grpc as db_grpc
 import payment_pb2 as pay_pb2
 import payment_pb2_grpc as pay_grpc
 
+from utils.telemetry import init_telemetry
+from opentelemetry.metrics import Observation
+
 
 EXECUTOR_ID = int(os.getenv("EXECUTOR_ID", "1"))
 EXECUTOR_PORT = os.getenv("EXECUTOR_PORT", "50055")
@@ -66,6 +69,38 @@ leader_id = None
 last_heartbeat = time.time()
 is_leader = False
 election_in_progress = False
+
+
+# --- OpenTelemetry (Checkpoint 4) ---
+# Instruments are wired at module load. The async gauge for `is_primary` is
+# polled by the meter provider once per export interval; the callback only
+# reads `is_leader` so it never blocks under lock contention.
+_tracer, _meter = init_telemetry(f"order_executor_{EXECUTOR_ID}")
+
+_twopc_total = _meter.create_counter(
+    "twopc_total",
+    description="2PC transactions coordinated by this executor (label outcome=commit|abort)",
+)
+_twopc_latency = _meter.create_histogram(
+    "twopc_latency_seconds",
+    description="End-to-end 2PC duration",
+    unit="s",
+)
+_inflight_2pc = _meter.create_up_down_counter(
+    "inflight_2pc_attempts",
+    description="Number of 2PC sessions currently in-flight on this executor",
+)
+
+
+def _observe_is_primary(_options):
+    return [Observation(1 if is_leader else 0, {"executor_id": str(EXECUTOR_ID)})]
+
+
+_meter.create_observable_gauge(
+    "executor_is_primary",
+    callbacks=[_observe_is_primary],
+    description="1 if this executor is the current bully-elected coordinator, else 0",
+)
 
 
 def parse_peers():
@@ -544,7 +579,18 @@ def consume_loop():
             f"item_count={response.order.item_count} items=[{items_repr}]"
         )
 
-        committed = run_2pc(response.order)
+        _inflight_2pc.add(1)
+        _start_2pc = time.time()
+        with _tracer.start_as_current_span("run_2pc") as _span:
+            _span.set_attribute("order.id", response.order.order_id)
+            _span.set_attribute("item_count", response.order.item_count)
+            committed = run_2pc(response.order)
+        _elapsed_2pc = time.time() - _start_2pc
+        _outcome = "commit" if committed else "abort"
+        _twopc_total.add(1, {"outcome": _outcome, "executor_id": str(EXECUTOR_ID)})
+        _twopc_latency.record(_elapsed_2pc, {"outcome": _outcome})
+        _inflight_2pc.add(-1)
+
         status = "committed" if committed else "aborted"
         print(
             f"[EXEC-{EXECUTOR_ID}] order_done "

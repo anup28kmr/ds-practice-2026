@@ -30,9 +30,9 @@ import books_database_pb2 as db_pb2
 import books_database_pb2_grpc as db_grpc
 
 DB_HOSTS = [
-    ("127.0.0.1:50258", 1),
-    ("127.0.0.1:50259", 2),
-    ("127.0.0.1:50260", 3),
+    ("127.0.0.1:51258", 1),
+    ("127.0.0.1:51259", 2),
+    ("127.0.0.1:51260", 3),
 ]
 ORCH = "http://localhost:8081"
 REPO_ROOT = os.path.abspath(os.path.join(HERE, "../.."))

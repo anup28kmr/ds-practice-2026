@@ -1,11 +1,14 @@
 import os
 import sys
 import threading
+import time
 import uuid
 
 import grpc
-from flask import Flask, request
+from flask import Flask, g, request
 from flask_cors import CORS
+
+from utils.telemetry import init_telemetry
 
 # Import gRPC stubs
 FILE = __file__ if "__file__" in globals() else os.getenv("PYTHONFILE", "")
@@ -41,6 +44,49 @@ import order_queue_pb2_grpc as order_queue_grpc
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
+
+# --- OpenTelemetry (Checkpoint 4) ---
+# A Flask before/after request pair gives one span per HTTP request plus the
+# four mandatory metric kinds. The counter labels the outcome class so the
+# dashboard can split 2xx from 4xx/5xx without a second instrument.
+_tracer, _meter = init_telemetry("orchestrator")
+_checkout_requests = _meter.create_counter(
+    "checkout_requests_total",
+    description="Number of HTTP requests handled by the orchestrator",
+)
+_checkout_latency = _meter.create_histogram(
+    "checkout_latency_seconds",
+    description="End-to-end /checkout latency, including the CP3 2PC fan-out",
+    unit="s",
+)
+_inflight_checkouts = _meter.create_up_down_counter(
+    "in_flight_checkouts",
+    description="Checkouts currently being processed by the orchestrator",
+)
+
+
+@app.before_request
+def _otel_before_request():
+    g.otel_start_time = time.time()
+    g.otel_span = _tracer.start_span(f"{request.method} {request.path}")
+    g.otel_span.set_attribute("http.method", request.method)
+    g.otel_span.set_attribute("http.target", request.path)
+    _inflight_checkouts.add(1, {"path": request.path})
+
+
+@app.after_request
+def _otel_after_request(response):
+    span = getattr(g, "otel_span", None)
+    if span is not None:
+        elapsed = time.time() - getattr(g, "otel_start_time", time.time())
+        status_class = f"{response.status_code // 100}xx"
+        attrs = {"path": request.path, "status_class": status_class}
+        _checkout_requests.add(1, attrs)
+        _checkout_latency.record(elapsed, attrs)
+        _inflight_checkouts.add(-1, {"path": request.path})
+        span.set_attribute("http.status_code", response.status_code)
+        span.end()
+    return response
 
 
 # CP3_EXECUTION_ONLY lets us skip the Checkpoint 2 validation pipeline
