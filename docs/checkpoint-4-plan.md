@@ -279,3 +279,76 @@ No additional bonus track is pursued.
 - Cleaning up the stashed local drift (kept in stash for the developer's later
   recovery).
 - Frontend instrumentation, frontend changes of any kind.
+
+## 8. Current-state audit (2026-05-13, pre-final-review pass)
+
+Recorded after the six implementation commits landed. Reproduces the
+requirement set from §1 and tags each item with its observed status.
+
+### 8.1 BASE rubric (Guide15)
+
+| Item | Pts | Implementation pointer | Status |
+|------|----:|------------------------|--------|
+| System operational with all components and order execution flow | 1.0 | 14-service `docker-compose.yaml`; `scripts/checkpoint3-checks.ps1` (CP3 verifier) | MET (Docker bring-up to be re-verified from clean state — see §8.4) |
+| Test suites (manual & automated) with demonstration | 1.25 | `tests/e2e/test_01..04_*.py` (Guide13 scenarios), `scripts/checkpoint4-checks.ps1`, plus CP3 verifier and per-service tests | MET |
+| Metrics and traces collection with demonstration | 1.25 | `utils/telemetry.py`; orchestrator / order_executor / books_database / payment_service instrumented. Instrument counts: Span = 5 (orch HTTP, exec `run_2pc`, db `db_write`, payment `payment_prepare`+`payment_commit`); Counter = 4; UpDownCounter = 2; Histogram = 4; Async Gauge = 3 — all five kinds exceed Guide14's `≥ 2 examples` rule | MET |
+| Logging | 0.25 | Pre-existing `[SVC] event=key=value` lines across all services (R3 from CP3) | MET |
+| Project organization, documentation, collaboration | 0.25 | `README.md` + `docs/checkpoint-4-{plan,summary,architecture,evaluation}.md` | MET |
+| Architecture diagram | 0.5 | `docs/checkpoint-4-architecture.md` (Mermaid + port table + B&W-friendly fallback) | MET |
+| Grafana Dashboard | 0.5 | `docs/grafana/dashboards/checkpoint-4.json` (12 panels) + auto-provision yaml | MET |
+
+### 8.2 BASE prerequisites (Guide14 monitoring spec)
+
+| Item | Pointer | Status |
+|------|---------|--------|
+| observability service `grafana/otel-lgtm` on 3000/4317/4318 | `docker-compose.yaml` `observability:` block | MET |
+| OpenTelemetry API+SDK+OTLP HTTP in each instrumented service's requirements | `{orchestrator,order_executor,books_database,payment_service}/requirements.txt` | MET |
+| "≥ 2 examples each of Span, Counter, UpDownCounter, Histogram, Asynchronous Gauge" | see counts in §8.1 | MET |
+| Dashboard JSON saved locally + re-importable | `docs/grafana/dashboards/checkpoint-4.json` (1 dashboard, `uid=cp4-overview`); provisioning yaml bind-mounted | MET |
+| Set environment variable `OTEL_METRIC_EXPORT_INTERVAL=1000` | **Not honoured**: compose passes no `OTEL_*` variables; `utils/telemetry.py` reads a non-standard `OTEL_METRIC_EXPORT_INTERVAL_MS` with default `10000` ms. The Guide14 standard variable currently has no effect. | PARTIAL |
+
+### 8.3 BASE prerequisites (Guide13 end-to-end testing)
+
+| Scenario | Pointer | Status |
+|----------|---------|--------|
+| 1 — single non-fraudulent order | `tests/e2e/test_01_single_clean_order.py` | MET |
+| 2 — multiple simultaneous non-conflicting | `tests/e2e/test_02_multiple_non_conflicting.py` (4 distinct titles, threaded barrier-start) | MET |
+| 3 — mixed fraud + non-fraud | `tests/e2e/test_03_mixed_fraud.py` (3 clean + 3 fraud, interleaved) | MET |
+| 4 — conflicting / same-book | `tests/e2e/test_04_conflicting_orders.py` (8 concurrent on stock=3 title; asserts via 2PC decision log because orchestrator returns `Order Approved` pre-2PC) | MET |
+
+### 8.4 Open verifications
+
+- Clean-state docker bring-up has not been re-run since the OTEL export-interval
+  gap was identified. §8.5's fix changes only compose env-vars and the
+  `telemetry.py` reader; nothing in the dataplane changes. Phase 4 runs
+  `docker compose down -v && docker compose up --build -d` followed by the
+  CP3 verifier and `pytest tests/e2e` to confirm no regression.
+- CP3 verifier is at **18/19** on the current tip. The single FAIL is
+  `bonus:participant-failure-recovery`, which references a
+  `docker-compose.fail-inject.yaml` override that was deleted at commit
+  `2b12c97 code cleanup` **before** the CP3 submission `f33f8da`. CP4 has
+  not regressed this — the count was already 18/19 at CP3 submission. The
+  B2 mechanism itself is still demonstrable via
+  `order_executor/tests/test_2pc_crash_recovery.py`. CP3 work is out of
+  scope per the task brief, so the verifier count stays as-is.
+
+### 8.5 Remaining fix
+
+Single PARTIAL item from §8.2: honour Guide14's
+`OTEL_METRIC_EXPORT_INTERVAL=1000` env var.
+
+- **utils/telemetry.py**: read the standard env var
+  `OTEL_METRIC_EXPORT_INTERVAL` (milliseconds, per OTel spec) first, fall
+  back to the legacy `OTEL_METRIC_EXPORT_INTERVAL_MS`, then default to
+  `10000`. This both unblocks the Guide14 variable and preserves any
+  in-flight scripts that set the legacy name.
+- **docker-compose.yaml**: add `OTEL_METRIC_EXPORT_INTERVAL=1000` to the
+  `environment:` blocks of the four instrumented services (orchestrator,
+  order_executor_{1,2,3}, payment_service, books_database_{1,2,3}). 1 s
+  cadence is Guide14's prescribed value and is well below the demo span
+  (~30 s for any single load run), so dashboard panels refresh visibly
+  during the demo without overwhelming the OTLP receiver.
+
+This single fix is the only outstanding implementation work. It is one
+commit, scoped to two files. After it lands, Phase 4 verification runs
+end-to-end against the updated compose.
