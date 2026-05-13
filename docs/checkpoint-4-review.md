@@ -11,17 +11,25 @@
   CP4 regression.
 - **7 / 7 BASE rubric items MET. 4 / 4 BONUS (TA pre-flagged) attempted
   and answered with measurements.**
+- **Post-implementation cleanup landed in the same branch:** 18
+  unreachable files removed (§9). Both verifiers re-run after the
+  deletions match baseline exactly — CP4 4/4 PASS, CP3 18/19 (same
+  pre-existing FAIL).
 - **Worth your attention:** the e2e suite for scenario 4 was hardened
-  in the last commit to read live stock instead of assuming seed — the
-  CP3 verifier's concurrent-writes test writes arbitrary values to
-  every key, including the title scenario 4 uses, so the previous
-  hard-coded `INITIAL_STOCK = 3` was brittle to test-order interaction.
+  to read live stock instead of assuming seed — the CP3 verifier's
+  concurrent-writes test writes arbitrary values to every key,
+  including the title scenario 4 uses, so the previous hard-coded
+  `INITIAL_STOCK = 3` was brittle to test-order interaction.
 
 ## 2. What's new since Checkpoint 3
 
 `git log f33f8da..HEAD --oneline`:
 
 ```
+08e9280 docs: move plan and summary to local-only
+e078ea6 chore: remove stale files for checkpoint 4 cleanup
+b3b3e08 docs: add checkpoint 4 cleanup plan
+2f0f335 docs: add checkpoint 4 review for team lead
 c23764b Make conflict e2e test robust to non-seed stock
 5d6391e Honour Guide14 OTEL_METRIC_EXPORT_INTERVAL=1000
 5e4ed40 Update plan with Phase-2 audit and remaining OTEL gap
@@ -32,6 +40,9 @@ c8f9280 Add four end-to-end test scenarios from Guide13
 1ffa8aa Add OpenTelemetry instrumentation and Grafana OTEL-LGTM stack
 7d9e56f Plan Checkpoint 4 work
 ```
+
+The top four commits are housekeeping rather than CP4 deliverables.
+See §9 for the cleanup story.
 
 Grouped by behavior:
 
@@ -266,7 +277,63 @@ docker compose down -v
    copy via the channel we agreed; it should not be looked for in
    the merge.
 
-## 9. Reviewer's checklist
+## 9. Stale-file cleanup (post-implementation audit)
+
+After the CP4 implementation was complete, a separate audit pass at
+`2f0f335` identified tracked files that neither the CP3 verifier nor
+the CP4 verifier reaches. The audit removed them in a single commit
+(`e078ea6 chore: remove stale files for checkpoint 4 cleanup`). Both
+verifiers re-run after the deletions match the pre-deletion baseline
+exactly: CP4 4/4 PASS, CP3 18/19 (the same pre-existing
+`bonus:participant-failure-recovery` FAIL that dates back to
+`2b12c97` before the CP3 submission). Net diff: 19 files changed, 1
+insertion, 1 260 deletions.
+
+### 9.1 Deleted files (one-sentence rationale each)
+
+| File | Rationale |
+|------|-----------|
+| `orchestrator/tests/test_cp3_execution_only.py` | Phase 8 standalone test that recreates orchestrator with `docker-compose.cp3-only.yaml`, deleted at `2b12c97` before CP3 submission; not invoked by any verifier. |
+| `order_executor/tests/test_2pc_end_to_end.py` | Phase 5 standalone 2PC happy-path smoke; superseded by the CP3 verifier's `2pc:valid-commit` + convergence checks. |
+| `payment_service/tests/smoke_test.py` | Phase 4 standalone smoke for individual participant RPCs; superseded by the CP3 verifier's full 2PC checks. |
+| `test_checkout_empty_items.json` | "Prepared payload" mentioned only in the README poke list; not invoked by any verifier. README sentence shortened in the same commit. |
+| `test_checkout_terms_false.json` | Same as above, terms-not-accepted variant. |
+| `utils/api/bookstore.yaml` | Course-provided OpenAPI example template; services use the gRPC `.proto` files in `utils/pb/` instead, not these YAMLs. |
+| `utils/api/fintech.yaml` | Same. |
+| `utils/api/ridehailing.yaml` | Same. |
+| `docs/diagrams/architecture-diagram.jpg` | CP2-era artefact; the CP4 architecture diagram is now [docs/checkpoint-4-architecture.md](checkpoint-4-architecture.md) (Mermaid + port table). |
+| `docs/diagrams/system-flow-diagram.jpg` | CP2-era artefact; not referenced by any current doc. |
+| `docs/diagrams/leader-election.svg` | CP2-era figure; not referenced by any current doc. |
+| `docs/diagrams/vector-clocks.svg` | CP2-era figure; not referenced by any current doc. |
+| `.idea/{.gitignore, ds-practice-2026.iml, inspectionProfiles/profiles_settings.xml, misc.xml, modules.xml, vcs.xml}` | IntelliJ IDEA project files committed by accident; the repo's `.gitignore` already lists `.idea`, so they will not reappear. |
+
+A follow-up commit (`08e9280 docs: move plan and summary to
+local-only`) then moved two `.md` files that the audit confirmed
+nobody downstream reads — the pre-implementation working memo
+`docs/checkpoint-4-plan.md` (the git log + diff carry the same
+information for you) and `docs/checkpoint-4-summary.md` (this review
+document replaces it) — into the gitignored `local-only/` directory.
+Incoming links from `README.md`, `architecture.md`, `evaluation.md`,
+and this file were updated in the same commit so no committed `.md`
+points at a missing file.
+
+### 9.2 Oddities surfaced during the audit (no action taken)
+
+1. **`order_executor/tests/test_2pc_crash_recovery.py` documents B2
+   alongside `test_2pc_fail_injection.py`, but it also requires the
+   deleted `docker-compose.fail-inject.yaml`.** §7 of this document
+   and the README's B2 row imply that test is currently runnable. It
+   is not — same root cause as the verifier's failing
+   `bonus:participant-failure-recovery`. The audit did not touch this
+   because the cleanup brief excluded both touching CP3 work and
+   fixing bugs noticed in passing; flagging it here so you have it on
+   the radar.
+2. **`load_test/results/smoke.csv`** is an untracked working-tree
+   file present since before the audit. Not a stale-file issue (it
+   is not tracked by git); listed here only because it shows up in
+   `git status` and might confuse a fresh checkout.
+
+## 10. Reviewer's checklist
 
 - [ ] CP3 regression: `.\scripts\checkpoint3-checks.ps1` reports 18/19
       (same as `f33f8da`).
@@ -282,6 +349,8 @@ docker compose down -v
 - [ ] §6 "Things to specifically scrutinize" — each item read and
       decision recorded.
 - [ ] §8 open questions answered before merge.
+- [ ] §9 cleanup deletions reviewed — each row's rationale acceptable
+      and the regression result (CP4 4/4, CP3 18/19) confirmed.
 - [ ] `git tag checkpoint-4` applied to the merge commit on `master`
       (post-merge, not pre-merge).
 - [ ] This file deleted before the merge to `master`, OR left in place
