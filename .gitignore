@@ -3,13 +3,21 @@ __pycache__
 .claude/
 books_database/state/
 
+# Local-only working files (operator demo scripts, scratch notes). The
+# entire folder is excluded so anything dropped here stays off the
+# remote branch; the team-lead-only checkpoint-4-script.tex lives here.
+local-only/
+
 # Local-only development notes (kept out of the remote repository).
 # All .md files except the root README.md are excluded so that human
 # reviewers see a single concise document rather than scattered notes.
 # The four CP4 deliverable docs are committed (the rubric grades them).
+# The team-lead review .md is also committed; the team lead removes it
+# before merging the PR to master.
 *.md
 !/README.md
 !docs/checkpoint-4-plan.md
 !docs/checkpoint-4-summary.md
 !docs/checkpoint-4-evaluation.md
 !docs/checkpoint-4-architecture.md
+!docs/checkpoint-4-review.md
