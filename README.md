@@ -39,7 +39,7 @@ Expected: 13 services running — the 9 from CP2 (`frontend`, `orchestrator`, 3 
 
 Expected: `Passed: 19  Failed: 0`. The 19 checks cover Docker plumbing, primary election, the 2PC commit and oversold-abort paths, cross-replica read convergence, DB primary failover, the participant-failure recovery bonus (B2), and the concurrent-writes bonus (B1).
 
-3. **(Optional)** Open `http://127.0.0.1:8080` for a manual order, or POST to `http://127.0.0.1:8081/checkout` with one of the prepared payloads (`test_checkout.json`, `test_checkout_oversold.json`, `test_checkout_fraud.json`, `test_checkout_empty_items.json`, `test_checkout_terms_false.json`).
+3. **(Optional)** Open `http://127.0.0.1:8080` for a manual order, or POST to `http://127.0.0.1:8081/checkout` with one of the prepared payloads (`test_checkout.json`, `test_checkout_oversold.json`, `test_checkout_fraud.json`).
 
 4. **Tear down** when finished.
 
