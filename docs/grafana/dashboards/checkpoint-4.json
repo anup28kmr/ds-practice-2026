@@ -1,0 +1,244 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "row",
+      "id": 100,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+      "title": "Orchestrator (HTTP entry)",
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 1,
+      "title": "/checkout request rate (by status class)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (status_class) (rate(checkout_requests_total[1m]))",
+          "legendFormat": "{{status_class}}"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+      "options": {"legend": {"showLegend": true, "displayMode": "list"}, "tooltip": {"mode": "single"}}
+    },
+    {
+      "type": "timeseries",
+      "id": 2,
+      "title": "/checkout latency (p50, p95, p99)",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(checkout_latency_seconds_bucket[1m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(checkout_latency_seconds_bucket[1m])))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(checkout_latency_seconds_bucket[1m])))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "options": {"legend": {"showLegend": true, "displayMode": "list"}, "tooltip": {"mode": "multi"}}
+    },
+    {
+      "type": "stat",
+      "id": 3,
+      "title": "In-flight /checkout requests",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 9},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "sum(in_flight_checkouts)", "legendFormat": "in-flight"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}
+    },
+    {
+      "type": "stat",
+      "id": 4,
+      "title": "Executor primary (1 = this executor is leader)",
+      "gridPos": {"h": 4, "w": 18, "x": 6, "y": 9},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "executor_is_primary", "legendFormat": "{{service_name}}"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}
+    },
+    {
+      "type": "row",
+      "id": 101,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 13},
+      "title": "Order Executor (2PC coordinator)",
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 5,
+      "title": "2PC outcomes per minute",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 14},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(twopc_total[1m]))",
+          "legendFormat": "{{outcome}}"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}
+    },
+    {
+      "type": "timeseries",
+      "id": 6,
+      "title": "2PC latency (p95)",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 14},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, outcome) (rate(twopc_latency_seconds_bucket[1m])))",
+          "legendFormat": "{{outcome}} p95"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
+    },
+    {
+      "type": "row",
+      "id": 102,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 22},
+      "title": "Books Database (replicated)",
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 7,
+      "title": "DB writes per minute (Write + 2PC commit, by replica)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 23},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (replica_id, path) (rate(db_writes_total[1m]))",
+          "legendFormat": "replica={{replica_id}} path={{path}}"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}
+    },
+    {
+      "type": "timeseries",
+      "id": 8,
+      "title": "Pending 2PC reservations on each replica",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 23},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "db_pending_orders",
+          "legendFormat": "{{service_name}}"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}
+    },
+    {
+      "type": "stat",
+      "id": 9,
+      "title": "kv_store key count per replica",
+      "gridPos": {"h": 4, "w": 12, "x": 0, "y": 31},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"refId": "A", "expr": "db_kv_store_keys", "legendFormat": "{{service_name}}"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}
+    },
+    {
+      "type": "row",
+      "id": 103,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 35},
+      "title": "Payment Service",
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 10,
+      "title": "Payment outcomes per minute (by phase)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 36},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (phase, outcome) (rate(payment_total[1m]))",
+          "legendFormat": "{{phase}} {{outcome}}"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}
+    },
+    {
+      "type": "timeseries",
+      "id": 11,
+      "title": "Payment RPC latency (p95)",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 36},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, phase) (rate(payment_latency_seconds_bucket[1m])))",
+          "legendFormat": "{{phase}} p95"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
+    },
+    {
+      "type": "row",
+      "id": 104,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 44},
+      "title": "Traces (Tempo) — search by service",
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "traces",
+      "id": 12,
+      "title": "Recent traces from orchestrator (uses Tempo data source)",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 45},
+      "datasource": {"type": "tempo", "uid": "tempo"},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "tempo", "uid": "tempo"},
+          "queryType": "traceqlSearch",
+          "filters": [
+            {"id": "service-name", "tag": "service.name", "operator": "=", "scope": "resource", "value": ["orchestrator"], "valueType": "string"}
+          ]
+        }
+      ]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["cp4", "ds2026"],
+  "templating": {"list": []},
+  "time": {"from": "now-15m", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "Checkpoint 4 — Distributed-systems CP3 system",
+  "uid": "cp4-overview",
+  "version": 1,
+  "weekStart": ""
+}

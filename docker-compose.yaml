@@ -15,7 +15,7 @@ services:
       - GF_AUTH_DISABLE_LOGIN_FORM=true
     volumes:
       - ./docs/grafana/dashboards:/otel-lgtm/grafana/conf/provisioning/dashboards-cp4:ro
-      - ./docs/grafana/provisioning/dashboards:/otel-lgtm/grafana/conf/provisioning/dashboards:ro
+      - ./docs/grafana/provisioning/dashboards/dashboards.yml:/otel-lgtm/grafana/conf/provisioning/dashboards/cp4.yaml:ro
 
   frontend:
     build:
