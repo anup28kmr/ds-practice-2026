@@ -6,9 +6,10 @@ books_database/state/
 # Local-only development notes (kept out of the remote repository).
 # All .md files except the root README.md are excluded so that human
 # reviewers see a single concise document rather than scattered notes.
-# The three CP4 deliverable docs are committed (the rubric grades them).
+# The four CP4 deliverable docs are committed (the rubric grades them).
 *.md
 !/README.md
 !docs/checkpoint-4-plan.md
 !docs/checkpoint-4-summary.md
 !docs/checkpoint-4-evaluation.md
+!docs/checkpoint-4-architecture.md

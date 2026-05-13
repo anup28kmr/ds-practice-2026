@@ -1,4 +1,16 @@
-# Distributed Systems Practice — Checkpoint 3
+# Distributed Systems Practice — Checkpoints 3 & 4
+
+> **Checkpoint 4 additions (on top of the f33f8da CP3 submission):** OpenTelemetry
+> instrumentation + a pre-provisioned Grafana dashboard, the four Guide13 end-to-end
+> test scenarios, a load-test harness, and the measured answers to the TA's
+> four pre-flagged questions. See
+> [docs/checkpoint-4-summary.md](docs/checkpoint-4-summary.md) for the operator
+> overview, [docs/checkpoint-4-evaluation.md](docs/checkpoint-4-evaluation.md)
+> for the TA-question evidence, [docs/checkpoint-4-architecture.md](docs/checkpoint-4-architecture.md)
+> for the system diagram, and [docs/checkpoint-4-plan.md](docs/checkpoint-4-plan.md)
+> for the implementation plan. The CP3 content below is unchanged.
+
+---
 
 This repository extends the Checkpoint 2 system with the two new distributed features required by Checkpoint 3:
 
