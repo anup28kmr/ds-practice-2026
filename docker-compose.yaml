@@ -36,6 +36,7 @@ services:
       - PYTHONUNBUFFERED=TRUE
       - PYTHONFILE=/app/orchestrator/src/app.py
       - PYTHONPATH=/app
+      - OTEL_METRIC_EXPORT_INTERVAL=1000
     volumes:
       - ./utils:/app/utils
       - ./orchestrator/src:/app/orchestrator/src
@@ -113,6 +114,7 @@ services:
       - EXECUTOR_PORT=50055
       - PEERS=1@order_executor_1:50055,2@order_executor_2:50055,3@order_executor_3:50055
       - PYTHONPATH=/app
+      - OTEL_METRIC_EXPORT_INTERVAL=1000
     volumes:
       - ./utils:/app/utils
       - ./order_executor/src:/app/order_executor/src
@@ -136,6 +138,7 @@ services:
       - EXECUTOR_PORT=50055
       - PEERS=1@order_executor_1:50055,2@order_executor_2:50055,3@order_executor_3:50055
       - PYTHONPATH=/app
+      - OTEL_METRIC_EXPORT_INTERVAL=1000
     volumes:
       - ./utils:/app/utils
       - ./order_executor/src:/app/order_executor/src
@@ -159,6 +162,7 @@ services:
       - EXECUTOR_PORT=50055
       - PEERS=1@order_executor_1:50055,2@order_executor_2:50055,3@order_executor_3:50055
       - PYTHONPATH=/app
+      - OTEL_METRIC_EXPORT_INTERVAL=1000
     volumes:
       - ./utils:/app/utils
       - ./order_executor/src:/app/order_executor/src
@@ -180,6 +184,7 @@ services:
       - PYTHONFILE=/app/payment_service/src/app.py
       - PYTHONPATH=/app
       - PAYMENT_PORT=50061
+      - OTEL_METRIC_EXPORT_INTERVAL=1000
     volumes:
       - ./utils:/app/utils
       - ./payment_service/src:/app/payment_service/src
@@ -198,6 +203,7 @@ services:
       - REPLICA_PORT=50058
       - PEERS=1@books_database_1:50058,2@books_database_2:50058,3@books_database_3:50058
       - STATE_DIR=/app/state
+      - OTEL_METRIC_EXPORT_INTERVAL=1000
     volumes:
       - ./utils:/app/utils
       - ./books_database/src:/app/books_database/src
@@ -217,6 +223,7 @@ services:
       - REPLICA_PORT=50058
       - PEERS=1@books_database_1:50058,2@books_database_2:50058,3@books_database_3:50058
       - STATE_DIR=/app/state
+      - OTEL_METRIC_EXPORT_INTERVAL=1000
     volumes:
       - ./utils:/app/utils
       - ./books_database/src:/app/books_database/src
@@ -236,6 +243,7 @@ services:
       - REPLICA_PORT=50058
       - PEERS=1@books_database_1:50058,2@books_database_2:50058,3@books_database_3:50058
       - STATE_DIR=/app/state
+      - OTEL_METRIC_EXPORT_INTERVAL=1000
     volumes:
       - ./utils:/app/utils
       - ./books_database/src:/app/books_database/src

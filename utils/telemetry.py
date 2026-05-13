@@ -64,12 +64,23 @@ def init_telemetry(service_name: str) -> Tuple[trace.Tracer, metrics.Meter]:
 
         readers = []
         if endpoint:
+            # Guide14 prescribes OTEL_METRIC_EXPORT_INTERVAL=1000 (ms). That
+            # name matches the OpenTelemetry SDK spec, so it is the primary
+            # signal. The legacy OTEL_METRIC_EXPORT_INTERVAL_MS is kept as a
+            # fallback for any in-flight scripts that already set it.
+            interval_ms_raw = (
+                os.getenv("OTEL_METRIC_EXPORT_INTERVAL")
+                or os.getenv("OTEL_METRIC_EXPORT_INTERVAL_MS")
+                or "10000"
+            )
+            try:
+                interval_ms = int(interval_ms_raw)
+            except ValueError:
+                interval_ms = 10000
             readers.append(
                 PeriodicExportingMetricReader(
                     OTLPMetricExporter(endpoint=f"{endpoint}/v1/metrics"),
-                    export_interval_millis=int(
-                        os.getenv("OTEL_METRIC_EXPORT_INTERVAL_MS", "10000")
-                    ),
+                    export_interval_millis=interval_ms,
                 )
             )
         meter_provider = MeterProvider(resource=resource, metric_readers=readers)
