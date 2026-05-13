@@ -228,9 +228,9 @@ primary (which would make the B1 concurrent-writes argument
 substantially harder to defend).
 
 The bottleneck named here is therefore not a *bug*. It is the cost of
-the simplicity that lets B1/B2/B3 fit in a checkpoint. Lifting it is
-the bullet point at the top of "next steps" in
-[checkpoint-4-summary.md](checkpoint-4-summary.md).
+the simplicity that lets B1/B2/B3 fit in a checkpoint. Lifting it
+would require multiple concurrent 2PC sessions per leader and is the
+natural next direction for the system; it is out of scope for CP4.
 
 ---
 

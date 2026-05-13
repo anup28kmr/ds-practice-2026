@@ -16,8 +16,6 @@ local-only/
 # before merging the PR to master.
 *.md
 !/README.md
-!docs/checkpoint-4-plan.md
-!docs/checkpoint-4-summary.md
 !docs/checkpoint-4-evaluation.md
 !docs/checkpoint-4-architecture.md
 !docs/checkpoint-4-review.md

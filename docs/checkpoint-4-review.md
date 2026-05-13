@@ -78,7 +78,7 @@ Grouped by behavior:
 | BASE-2 | "Test suites (manual & automated) with demonstration" (Guide15) | all | [tests/e2e/test_01..04](../tests/e2e/); [scripts/checkpoint4-checks.ps1](../scripts/checkpoint4-checks.ps1); [scripts/checkpoint3-checks.ps1](../scripts/checkpoint3-checks.ps1) | `.\scripts\checkpoint4-checks.ps1` → `4 passed`, banner `checkpoint4-checks PASSED` | **MET** |
 | BASE-3 | "Metrics and traces collection with demonstration" (Guide15) + Guide14 "≥ 2 examples each of Span, Counter, UpDownCounter, Histogram, and Asynchronous Gauge" | orchestrator, order_executor, books_database, payment_service | [utils/telemetry.py](../utils/telemetry.py); [orchestrator/src/app.py:48-89](../orchestrator/src/app.py#L48-L89); [order_executor/src/app.py:75-105](../order_executor/src/app.py#L75-L105); [books_database/src/app.py:120-155](../books_database/src/app.py#L120-L155); [payment_service/src/app.py:30-45](../payment_service/src/app.py#L30-L45) | `curl 'http://127.0.0.1:3000/api/datasources/proxy/uid/prometheus/api/v1/query?query=checkout_requests_total'` returns `status:success` with non-zero values after one checkout | **MET** |
 | BASE-4 | "Add System Logs: Implement relevant system logs within your application" (Guide15) | all | `[SVC] event=... key=value` lines across all services (pre-existing CP3 R3 work) | `docker compose logs orchestrator order_executor_1 order_executor_2 order_executor_3 books_database_1 books_database_2 books_database_3 payment_service order_queue` after any demo step | **MET** |
-| BASE-5 | "Project organization, documentation, collaboration" (Guide15) | docs | [README.md](../README.md); [docs/checkpoint-4-plan.md](checkpoint-4-plan.md); [docs/checkpoint-4-summary.md](checkpoint-4-summary.md); [docs/checkpoint-4-architecture.md](checkpoint-4-architecture.md); [docs/checkpoint-4-evaluation.md](checkpoint-4-evaluation.md) | open the README — the top-of-file note links to the four CP4 docs | **MET** |
+| BASE-5 | "Project organization, documentation, collaboration" (Guide15) | docs | [README.md](../README.md); [docs/checkpoint-4-architecture.md](checkpoint-4-architecture.md); [docs/checkpoint-4-evaluation.md](checkpoint-4-evaluation.md) | open the README — the top-of-file note links to the architecture diagram and TA-question evidence | **MET** |
 | BASE-6 | "Final Architecture Diagram: Develop an architecture diagram illustrating the multiple services, ports, communication protocols, and their relationships" (Guide15) | docs | [docs/checkpoint-4-architecture.md](checkpoint-4-architecture.md) (Mermaid + port table + legend) | open in any Markdown-aware viewer | **MET** |
 | BASE-7 | "Grafana Dashboard: Create a Grafana Dashboard to visualize the collection of your metrics and traces" (Guide15) + Guide14 "Save dashboard JSON model locally in repository" | observability + all instrumented services | [docs/grafana/dashboards/checkpoint-4.json](grafana/dashboards/checkpoint-4.json); [docs/grafana/provisioning/dashboards/dashboards.yml](grafana/provisioning/dashboards/dashboards.yml) | with stack up: open `http://127.0.0.1:3000/d/cp4-overview/` (anonymous Admin enabled) — 12 panels render | **MET** |
 | BONUS Q1 | TA pre-flagged: *"What if we have supersale?"* | observability, load harness | [docs/checkpoint-4-evaluation.md §1](checkpoint-4-evaluation.md#1-what-if-we-have-supersale) + [load_test/results/supersale.csv](../load_test/results/supersale.csv) | run the command quoted in §1 of evaluation.md | **MET** |
@@ -90,24 +90,21 @@ Grouped by behavior:
 
 Open these in order, one sentence per file on why:
 
-1. [docs/checkpoint-4-summary.md](checkpoint-4-summary.md) — the
-   one-pager: what changed, the four TA-question results in one
-   sentence each, and the explicit "things to flag at demo time" list.
-2. [docs/checkpoint-4-architecture.md](checkpoint-4-architecture.md) —
+1. [docs/checkpoint-4-architecture.md](checkpoint-4-architecture.md) —
    the Mermaid system diagram + port table; orients you to what the
    observability service is doing and how it sits beside the 13 CP3
    services.
-3. [utils/telemetry.py](../utils/telemetry.py) — 85 lines that decide
+2. [utils/telemetry.py](../utils/telemetry.py) — 85 lines that decide
    how every instrumented service exports. If you suspect the
    instrumentation is wrong, this is the only file to read; the four
    service-level files are then just `init_telemetry("name")` + a
    handful of `_meter.create_*` calls.
-4. [tests/e2e/test_04_conflicting_orders.py](../tests/e2e/test_04_conflicting_orders.py)
+3. [tests/e2e/test_04_conflicting_orders.py](../tests/e2e/test_04_conflicting_orders.py)
    — the only e2e test with non-trivial logic (it has to wait for
    coordinator decisions out-of-band of the HTTP response). The
    "read live stock first" hardening lives in this file and the helper
    in [tests/e2e/_common.py](../tests/e2e/_common.py).
-5. [docs/checkpoint-4-evaluation.md](checkpoint-4-evaluation.md) — the
+4. [docs/checkpoint-4-evaluation.md](checkpoint-4-evaluation.md) — the
    four TA-question answers. Each section quotes the question, opens
    with the answer, then shows the numbers. The bottleneck section §4
    has four orthogonal pieces of evidence pointing at the same

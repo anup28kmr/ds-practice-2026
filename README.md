@@ -4,11 +4,9 @@
 > instrumentation + a pre-provisioned Grafana dashboard, the four Guide13 end-to-end
 > test scenarios, a load-test harness, and the measured answers to the TA's
 > four pre-flagged questions. See
-> [docs/checkpoint-4-summary.md](docs/checkpoint-4-summary.md) for the operator
-> overview, [docs/checkpoint-4-evaluation.md](docs/checkpoint-4-evaluation.md)
-> for the TA-question evidence, [docs/checkpoint-4-architecture.md](docs/checkpoint-4-architecture.md)
-> for the system diagram, and [docs/checkpoint-4-plan.md](docs/checkpoint-4-plan.md)
-> for the implementation plan. The CP3 content below is unchanged.
+> [docs/checkpoint-4-architecture.md](docs/checkpoint-4-architecture.md) for the
+> system diagram and [docs/checkpoint-4-evaluation.md](docs/checkpoint-4-evaluation.md)
+> for the TA-question evidence. The CP3 content below is unchanged.
 
 ---
 

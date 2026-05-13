@@ -112,6 +112,4 @@ CP3 ended at f33f8da with 13 services. CP4 adds **one** new service
 services (orchestrator, order_executor, books_database, payment_service).
 The dataplane (`/checkout` → orchestrator → backends → queue → executor →
 2PC → DB + payment) is unchanged. See [README.md](../README.md) for the
-CP3 design rationale, and
-[checkpoint-4-summary.md](checkpoint-4-summary.md) for an operator-level
-overview of the new things.
+CP3 design rationale.
