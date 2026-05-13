@@ -115,6 +115,39 @@ def classify(body: Dict[str, Any]) -> str:
     return "unknown"
 
 
+def read_stock_quorum(title: str, timeout_seconds: float = 5.0) -> int:
+    """Return the agreed-upon stock of `title` across the three replicas.
+
+    We shell out to scripts/_cp3_db_probe.py so the e2e suite can be run
+    with just `pytest`-as-its-only-dep, no gRPC stubs. The probe prints
+    one `DB-<id>=<value>` line per replica; we parse, require at least
+    one numeric value, and pick the majority.
+    """
+    import re
+    import subprocess
+
+    result = subprocess.run(
+        ["python", "scripts/_cp3_db_probe.py", "read-stock", title,
+         "--tolerate-missing"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=timeout_seconds,
+    )
+    counts: Dict[int, int] = {}
+    for line in result.stdout.splitlines():
+        m = re.match(r"^DB-\d+=(-?\d+)\s*$", line.strip())
+        if m:
+            v = int(m.group(1))
+            counts[v] = counts.get(v, 0) + 1
+    if not counts:
+        raise RuntimeError(
+            f"read_stock_quorum({title!r}) got no numeric values; "
+            f"probe stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+    return max(counts.items(), key=lambda kv: kv[1])[0]
+
+
 def collect_2pc_decisions(
     order_ids: List[str],
     timeout_seconds: float = 30.0,

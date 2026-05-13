@@ -4,11 +4,11 @@
   requests, such as attempting to purchase the same book simultaneously."
 
 We fire eight concurrent orders, each asking for one copy of
-'Designing Data-Intensive Applications' which seeds with stock 3. The
-B1 concurrent-writes mechanism in books_database/src/app.py guards the
+'Designing Data-Intensive Applications' (seed stock 3). The B1
+concurrent-writes mechanism in books_database/src/app.py guards the
 read-validate-write window with a per-title lock, so the books database
-must vote commit on exactly three Prepares and abort the rest with
-'insufficient stock'.
+votes commit on at most `current_stock` Prepares and aborts the rest
+with 'insufficient stock'.
 
 Important asymmetry vs scenarios 1-3: the orchestrator returns
 'Order Approved' the instant the order is enqueued. The actual 2PC
@@ -16,24 +16,33 @@ COMMIT/ABORT happens asynchronously on the elected order_executor
 leader. So this test ignores the HTTP status field and instead reads
 the leader's `2pc_decision` log line for each order_id, which is the
 authoritative outcome.
-"""
 
-import pytest
+The test reads the *live* stock at the start rather than assuming the
+seed value, because the CP3 verifier's `bonus:concurrent-writes` test
+overwrites unrelated keys including this one and would otherwise leave
+the stack with stock != seed. The safety invariant we actually want to
+prove is "commits never exceed available stock", which is correct under
+any starting stock.
+"""
 
 from tests.e2e._common import (
     build_payload,
     classify,
     collect_2pc_decisions,
     post_concurrent,
+    read_stock_quorum,
 )
 
 
 CONFLICT_TITLE = "Designing Data-Intensive Applications"
-INITIAL_STOCK = 3  # see SEED_STOCK in books_database/src/app.py
 N_ORDERS = 8
 
 
 def test_conflicting_orders_match_initial_stock():
+    pre_stock = read_stock_quorum(CONFLICT_TITLE)
+    expected_commits = min(pre_stock, N_ORDERS)
+    expected_aborts = N_ORDERS - expected_commits
+
     payloads = [
         build_payload(
             user_name=f"Conflict {i}",
@@ -57,30 +66,22 @@ def test_conflicting_orders_match_initial_stock():
     commits = [oid for oid, d in decisions.items() if d == "COMMIT"]
     aborts = [oid for oid, d in decisions.items() if d == "ABORT"]
 
-    if len(commits) == INITIAL_STOCK:
-        # Best case: fresh stack, exactly stock orders commit, others abort.
-        assert len(aborts) == N_ORDERS - INITIAL_STOCK, (
-            f"expected {N_ORDERS - INITIAL_STOCK} aborts on a fresh stack, "
-            f"got commits={len(commits)} aborts={len(aborts)} "
-            f"decisions={decisions}"
-        )
-        return
-
-    # Either the stack wasn't fresh OR a previous run consumed some stock.
-    # In every case, the safety invariant must hold: the number of commits
-    # cannot exceed the stock that was available at the time these orders
-    # raced. We can't observe the pre-test stock from here, so the only
-    # universal assertion is "we did not commit more than the initial seed",
-    # which still proves the per-title lock is doing its job.
-    assert len(commits) <= INITIAL_STOCK, (
-        f"committed more orders ({len(commits)}) than the initial seed stock "
-        f"({INITIAL_STOCK}); the per-title lock failed. "
-        f"decisions={decisions}"
+    # Safety invariant: commits never exceed the stock that was available
+    # when the orders raced. This is the property the per-title lock
+    # guarantees.
+    assert len(commits) <= pre_stock, (
+        f"committed more orders ({len(commits)}) than the pre-test stock "
+        f"({pre_stock}); the per-title lock failed. decisions={decisions}"
     )
-    if len(commits) < INITIAL_STOCK:
-        pytest.skip(
-            f"non-fresh stack: only {len(commits)} of {N_ORDERS} orders "
-            f"committed (initial seed {INITIAL_STOCK}). The safety invariant "
-            "still holds. Re-run after 'docker compose down -v' for the "
-            "strict assertion."
-        )
+
+    # Liveness: with eight orders racing on a deterministic primary, every
+    # available unit should turn into a commit and the remainder into a
+    # clean abort. Both are visible to the demo audience.
+    assert len(commits) == expected_commits, (
+        f"expected {expected_commits} commits given pre_stock={pre_stock}, "
+        f"got {len(commits)}. decisions={decisions}"
+    )
+    assert len(aborts) == expected_aborts, (
+        f"expected {expected_aborts} aborts given pre_stock={pre_stock}, "
+        f"got {len(aborts)}. decisions={decisions}"
+    )
